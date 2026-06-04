@@ -345,10 +345,6 @@ export default function Page() {
   // a "waiting" view so the user keeps context between turns/hands.
   const displayTable = table ?? lastSeenTable;
   const isStaleView = !table && !!lastSeenTable;
-  // We can be "seated but the UI has no table to show" on the very first hand
-  // before our first action ever fires. Detect it so we don't display the
-  // misleading "No active table" screen while we're still seated.
-  const seatedButBlind = !displayTable && lobby !== null && !lobby.inLobby;
   const selfSeat = displayTable?.seats.find(
     (s) => s.seatNumber === displayTable.selfSeatNumber,
   );
@@ -386,17 +382,13 @@ export default function Page() {
       )}
 
       {!displayTable ? (
-        seatedButBlind ? (
-          <SeatedWaiting autoJoin={autoJoin} onToggleAutoJoin={toggleAutoJoin} />
-        ) : (
-          <NoTable
-            lobby={lobby}
-            autoJoin={autoJoin}
-            onToggleAutoJoin={toggleAutoJoin}
-            busy={submitting}
-            note={submitMsg}
-          />
-        )
+        <NoTable
+          lobby={lobby}
+          autoJoin={autoJoin}
+          onToggleAutoJoin={toggleAutoJoin}
+          busy={submitting}
+          note={submitMsg}
+        />
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3 sm:gap-4">
           <div className="space-y-3 sm:space-y-4 min-w-0">
@@ -624,39 +616,6 @@ function MobileActionDrawer({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function SeatedWaiting({
-  autoJoin,
-  onToggleAutoJoin,
-}: {
-  autoJoin: boolean;
-  onToggleAutoJoin: () => void;
-}) {
-  return (
-    <div className="mt-10 max-w-md mx-auto bg-zinc-900/80 border border-zinc-800 rounded-xl p-6 text-center">
-      <h2 className="text-lg font-bold mb-2">Seated — waiting for your turn</h2>
-      <p className="text-sm text-zinc-400 mb-2">
-        You're at a table. The first time it's your turn, the felt and your hole cards
-        will appear here, and you'll get a sound + vibration.
-      </p>
-      <p className="text-[11px] text-zinc-500 mb-4">
-        (Dev.fun's API only sends the table state on your turn — there's no way to render
-        it before you've acted at least once this session.)
-      </p>
-      <button
-        onClick={onToggleAutoJoin}
-        aria-pressed={autoJoin}
-        className={`rounded-md py-1.5 px-3 font-semibold text-xs ${
-          autoJoin
-            ? "bg-red-700/40 border border-red-600/60 text-red-100"
-            : "bg-zinc-800 border border-zinc-700 text-zinc-300"
-        }`}
-      >
-        {autoJoin ? "● Auto-rejoin: stop" : "○ Auto-rejoin"}
-      </button>
     </div>
   );
 }

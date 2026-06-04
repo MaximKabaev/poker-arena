@@ -161,15 +161,14 @@ def _pattern_override(
         return None
     spot = current_spot(table)
 
-    # c-bet whiff steal-bet — tightened to require medium+ (was non-air).
-    # Previously fired on marginal hands too — now only when we have real showdown
-    # value AND the opponent is giving up. Conservative version: value-bet only.
+    # 1) caller_facing_check: PFR has checked to us → steal-bet if PFR has c_bet_whiff.
+    # Reverted to fire with any non-air hand (back to pre-protect-the-lead state).
     if spot == SpotType.CALLER_FACING_CHECK and (a.can_bet or a.can_raise):
         pfr_seat = preflop_aggressor_seat(table)
         pfr_id = seat_to_agent_id(table, pfr_seat)
         if pfr_id:
             pat = ctx.registry.lookup(table.competition_id, pfr_id, SpotType.PFR_CBET_FLOP)
-            if pat and pat.name == "c_bet_whiff" and tier in ("medium", "strong", "nuts"):
+            if pat and pat.name == "c_bet_whiff" and tier != "air":
                 target = max(int(table.pot_chips * 0.5), a.min_bet or 0)
                 target = min(target, a.max_commit)
                 return Decision(
@@ -179,14 +178,32 @@ def _pattern_override(
                         "vr": f"ln:PFR x {int(pat.confidence*100)}%",
                         "ke": f"tier {tier}",
                         "bf": f"flop {''.join(table.board_cards)[:6]}",
-                        "pp": "value bet",
-                        "sr": "x-back steal",
+                        "pp": "IP steal",
+                        "sr": "exploit c-bet whiff",
                     }),
                 )
 
-    # PFR-air c-bet bluff exploit DISABLED in protect-the-lead mode —
-    # initiating with no hand even vs folds-to-cbet opponents adds variance
-    # we don't need. We still value-bet patterns just fine.
+    # 2) PFR with marginal/air facing a caller who folds_to_cbet: bluff c-bet
+    # Re-enabled — the +EV exploit vs flop-folders.
+    if spot == SpotType.PFR_CBET_FLOP and tier in ("air", "marginal") and (a.can_bet or a.can_raise):
+        for seat in table.active_opponents:
+            pat = ctx.registry.lookup(
+                table.competition_id, seat.agent_id, SpotType.CALLER_FACING_CBET
+            )
+            if pat and pat.name == "folds_to_cbet":
+                target = max(int(table.pot_chips * 0.33), a.min_bet or 0)
+                target = min(target, a.max_commit)
+                return Decision(
+                    action="bet" if a.can_bet else "raise",
+                    amount=target, message="gg", layer="L1",
+                    reasoning=_reasoning({
+                        "vr": f"ln:{seat.agent_handle[:8]} folds-cb {int(pat.confidence*100)}%",
+                        "ke": f"tier {tier}",
+                        "bf": f"flop {''.join(table.board_cards)[:6]}",
+                        "pp": "PFR bluff cb",
+                        "sr": "33% pot exploit",
+                    }),
+                )
     return None
 
 
@@ -306,9 +323,25 @@ def postflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decisio
                     "sr": f"{int(sizing*100)}% pot val",
                 }),
             )
-        # Semibluffs disabled in protect-the-lead mode (2026-06-04 round 3).
-        # Draws still inform combined-equity for pot-odds calls but we no
-        # longer INITIATE bets without made hands. Keeps variance down.
+        # Semibluff — re-enabled (flop only, OE/combo only). Pre-big-win baseline.
+        if (
+            draw in ("combo", "OE")
+            and table.street == Street.FLOP
+            and tier == "air"
+            and (a.can_bet or a.can_raise)
+        ):
+            target = max(int(pot * 0.33), a.min_bet or 0)
+            target = min(target, a.max_commit)
+            return Decision(
+                action="bet" if a.can_bet else "raise", amount=target,
+                message="gg", layer="L1",
+                reasoning=_reasoning({
+                    "vr": "ln:checked to",
+                    "ke": f"draw {draw} eq~{int(eq*100)}%",
+                    "bf": bf, "pp": "semibluff",
+                    "sr": "33% pot SB",
+                }),
+            )
         return Decision(
             action="check", message="gg", layer="L1",
             reasoning=_reasoning({

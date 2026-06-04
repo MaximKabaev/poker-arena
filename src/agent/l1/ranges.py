@@ -9,27 +9,25 @@ from __future__ import annotations
 
 from ..cards import expand_range
 
-# Raise-first-in (RFI) ranges — protect-the-lead mode (2026-06-04 round 3).
-# After a +1003 spike to 1911 chips / rank 70, tightening BTN/CO/SB back to
-# rock-baseline levels. Goal: minimise variance, preserve stack. We still
-# value-bet/raise strong hands aggressively (river fix kept) — we just enter
-# fewer hands voluntarily.
+# Raise-first-in (RFI) ranges — reverted to the pre-big-win baseline (the state
+# that produced the +1003 spike). Protect-the-lead tightening was too defensive
+# and bled chips. ~17% avg VPIP, BTN aggressive, blinds reasonable.
 RFI: dict[str, frozenset[str]] = {
     "UTG": expand_range(
-        "88+, AJs+, KQs, AQo+"
+        "77+, AJs+, KQs, AQo+"
     ),
     "HJ": expand_range(
-        "77+, ATs+, KJs+, QJs, AJo+, KQo"
+        "66+, ATs+, KTs+, QJs, JTs, AJo+, KQo"
     ),
     "CO": expand_range(
-        "22+, A8s+, KTs+, QTs+, JTs, T9s, ATo+, KJo+, QJo"
+        "22+, A2s+, KTs+, Q9s+, J9s+, T9s, 98s, ATo+, KJo+, QJo"
     ),
     "BTN": expand_range(
-        "22+, A2s+, KTs+, QTs+, JTs, T9s, 98s, 87s, "
-        "ATo+, KJo+, QJo, JTo"
+        "22+, A2s+, K8s+, Q8s+, J8s+, T8s+, 97s+, 87s, 76s, 65s, "
+        "A8o+, KTo+, QTo+, JTo, T9o"
     ),
     "SB": expand_range(
-        "22+, A8s+, KTs+, QTs+, JTs, ATo+, KJo+, QJo"
+        "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo"
     ),
 }
 

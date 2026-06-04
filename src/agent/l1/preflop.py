@@ -151,9 +151,27 @@ def preflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decision
 
     # ---- single open facing us ----
     if raises == 1 and opener_pos is not None:
-        # 3-bet bluff exploit DISABLED in protect-the-lead mode.
-        # We still 3-bet for value via the standard chart below; we just no
-        # longer add suited connectors / wheel aces as bluff combos.
+        # Pattern override: if this opener folds to 3-bets at high freq, expand
+        # our 3-bet range to include bluff combos (suited aces, suited connectors).
+        # Re-enabled — was the +EV exploit that contributed to the +1003 spike.
+        opener_agent_id = seat_to_agent_id(table, opener_seat)
+        if ctx and ctx.registry and opener_agent_id:
+            pat = ctx.registry.lookup(
+                table.competition_id, opener_agent_id, SpotType.FACING_3BET
+            )
+            if pat and pat.name == "fold_to_3bet" and code in BLUFF_3BET_EXPLOIT:
+                ip = hero_pos in ("BTN", "CO") and opener_pos not in ("BTN", "CO")
+                target = _three_bet_size_to(table, ip)
+                action, amount = _value_action(target, a)
+                return Decision(
+                    action=action, amount=amount, message="gg", layer="L1",
+                    reasoning=build_reasoning({
+                        "vr": f"ln:{opener_pos} folds3b {int(pat.confidence*100)}%",
+                        "ke": f"3bet bluff {code}",
+                        "pp": f"{hero_pos} {action}",
+                        "sr": "exploit fold-to-3bet",
+                    }),
+                )
         if code in R.three_bet_set(opener_pos):
             ip = hero_pos in ("BTN", "CO") and opener_pos not in ("BTN", "CO")
             target = _three_bet_size_to(table, ip)
