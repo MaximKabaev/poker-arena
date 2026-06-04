@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/session";
-import { arena, ArenaError, withRequestCreds } from "@/lib/arena";
-import { loadCreds } from "@/lib/creds";
+import { arena, ArenaError, currentCreds, withRequestCreds } from "@/lib/arena";
+
 
 interface Body {
   txHash?: string;
@@ -19,7 +19,7 @@ export async function POST(req: Request) {
   } catch {}
   try {
     return await withRequestCreds(req, async () => {
-      const creds = await loadCreds();
+      const creds = currentCreds();
       const r = await arena.rebuy(creds.competitionId, body.txHash);
       return NextResponse.json({ ok: true, ...r });
     });

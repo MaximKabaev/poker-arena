@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/session";
-import { arena, withRequestCreds } from "@/lib/arena";
-import { loadCreds } from "@/lib/creds";
+import { arena, currentCreds, withRequestCreds } from "@/lib/arena";
+
 import { summarizeOpponent } from "@/lib/openai";
 
 export async function GET(req: Request) {
@@ -12,7 +12,7 @@ export async function GET(req: Request) {
 
   try {
     return await withRequestCreds(req, async () => {
-      const creds = await loadCreds();
+      const creds = currentCreds();
       const stats = await arena.agentStats(creds.competitionId, agentId);
       const { summary, fromCache, model } = await summarizeOpponent(agentId, stats);
       return NextResponse.json({ summary, fromCache, model, stats });

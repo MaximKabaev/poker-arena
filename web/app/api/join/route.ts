@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/session";
-import { arena, ArenaError, withRequestCreds } from "@/lib/arena";
-import { loadCreds } from "@/lib/creds";
+import { arena, ArenaError, currentCreds, withRequestCreds } from "@/lib/arena";
+
 
 export async function POST(req: Request) {
   if (!(await isAuthed())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   try {
     return await withRequestCreds(req, async () => {
-      const creds = await loadCreds();
+      const creds = currentCreds();
       const res = await arena.join(creds.competitionId);
       return NextResponse.json(res);
     });

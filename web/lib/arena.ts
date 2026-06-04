@@ -58,6 +58,20 @@ export async function withRequestCreds<T>(
   return credsCtx.run(creds, fn);
 }
 
+// Inside a withRequestCreds() block, returns the creds scoped to that request
+// (per-window agent). Throws if called outside the context — every route
+// that needs the agentId/competitionId for this request must use this rather
+// than calling loadCreds() (which always returns the global active agent).
+export function currentCreds(): ArenaCreds {
+  const c = credsCtx.getStore();
+  if (!c) {
+    throw new Error(
+      "currentCreds() called outside withRequestCreds() — wrap the route handler.",
+    );
+  }
+  return c;
+}
+
 async function call<T>(
   method: "GET" | "POST" | "PATCH",
   pathSuffix: string,

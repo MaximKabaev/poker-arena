@@ -21,6 +21,45 @@ from ..reasoning import build as build_reasoning
 from ..state import AllowedActions, Decision, Street, Table
 from .exploits import is_outlier, recent_aggressor_seat, seat_to_agent_id
 
+
+def _is_dry_board(board: list[str]) -> bool:
+    """True if the flop is dry: rainbow (≥2 suits) AND not connected (rank span > 4).
+    Examples: K72 rainbow, J63r, A82 — all dry. Not dry: 765r (connected), 9♠8♠7♥ (wet).
+    """
+    if len(board) < 3:
+        return False
+    flop = board[:3]
+    suits = {c[1].lower() for c in flop}
+    if len(suits) < 2:
+        return False  # monotone = wet
+    if len(suits) == 2:
+        # 2-tone = semi-wet; treat as not-dry for our purposes
+        return False
+    # Rainbow flop — check connection
+    ranks = sorted(RANK_VAL[c[0].upper()] for c in flop)
+    return (ranks[2] - ranks[0]) > 4
+
+
+def _any_active_station(table: Table, ctx: DecisionContext | None) -> bool:
+    """True if any active opponent's stats look like a calling station.
+    Heuristic: WSD > 55% (sees showdowns and wins them often = calls down) AND
+    AF < 1.5 (passive, doesn't raise much). Skip bluffs vs these — they call too much.
+    """
+    if not ctx or not ctx.cache:
+        return False
+    for opp in table.active_opponents:
+        if not opp.agent_id:
+            continue
+        stats = ctx.cache.get(opp.agent_id, table.competition_id)
+        if not stats:
+            continue
+        if (
+            stats.wsd is not None and stats.wsd > 0.55
+            and stats.af is not None and stats.af < 1.5
+        ):
+            return True
+    return False
+
 HandTier = Literal["nuts", "strong", "medium", "marginal", "air"]
 DrawType = Literal["combo", "FD", "OE", "GS", "none"]
 
@@ -321,6 +360,29 @@ def postflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decisio
                     "vr": "ln:checked to", "ke": f"eq~{int(eq*100)}%",
                     "bf": bf, "pp": "value bet",
                     "sr": f"{int(sizing*100)}% pot val",
+                }),
+            )
+        # Default c-bet — as PFR on the flop on a DRY board, fire a 33% pot stab
+        # with air/marginal hands. Stat-aware: skip if any active opponent is a
+        # calling station (they don't fold, so the bluff is -EV).
+        if (
+            table.street == Street.FLOP
+            and tier in ("air", "marginal")
+            and (a.can_bet or a.can_raise)
+            and current_spot(table) == SpotType.PFR_CBET_FLOP
+            and _is_dry_board(board)
+            and not _any_active_station(table, ctx)
+        ):
+            target = max(int(pot * 0.33), a.min_bet or 0)
+            target = min(target, a.max_commit)
+            return Decision(
+                action="bet" if a.can_bet else "raise", amount=target,
+                message="gg", layer="L1",
+                reasoning=_reasoning({
+                    "vr": "ln:checked to (PFR)",
+                    "ke": f"tier {tier} dry board",
+                    "bf": bf, "pp": "default cbet",
+                    "sr": "33% pot dry",
                 }),
             )
         # Semibluff — re-enabled (flop only, OE/combo only). Pre-big-win baseline.

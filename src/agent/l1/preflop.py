@@ -100,10 +100,41 @@ def preflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decision
 
     # ---- unraised pot (RFI or BB-check-back) ----
     if raises == 0:
+        # BB unraised → always check (free flop, never fold here).
         if hero_pos == "BB" and a.can_check:
             return Decision(
                 action="check", message="gg", layer="L1",
                 reasoning=_reasoning({"vr": "typ:limp field", "pp": "BB x", "ke": f"hand {code}"}),
+            )
+        # SB unraised → always complete (per owner request) UNLESS the hand
+        # is strong enough to RFI, in which case still raise for value.
+        if hero_pos == "SB":
+            if code in R.RFI["SB"]:
+                to = _cap_to_allowed(_open_size_to(table, hero_pos), a)
+                return Decision(
+                    action="raise" if a.can_raise else "bet",
+                    amount=to, message="gg", layer="L1",
+                    reasoning=_reasoning({
+                        "vr": "typ:6max field", "ke": f"RFI {hero_pos}",
+                        "pp": "SB open", "sr": f"open {to // table.big_blind_chips}bb",
+                    }),
+                )
+            if a.can_call:
+                return Decision(
+                    action="call", message="gg", layer="L1",
+                    reasoning=_reasoning({
+                        "vr": "typ:unraised", "ke": f"complete {code}",
+                        "pp": "SB complete", "sr": f"always complete {a.call_chips}c",
+                    }),
+                )
+            if a.can_check:
+                return Decision(
+                    action="check", message="gg", layer="L1",
+                    reasoning=_reasoning({"vr": "typ:unraised", "pp": "SB x"}),
+                )
+            return Decision(
+                action="fold", message="gg", layer="L1",
+                reasoning=_reasoning({"vr": "typ:unraised", "pp": "SB no-call legal"}),
             )
         if hero_pos not in R.RFI:
             return None
