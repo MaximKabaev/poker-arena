@@ -141,6 +141,23 @@ export const arena = {
 
   // ----- discovery / identity -----
   me: () => call<AgentMeRaw>("GET", "/agent/me"),
+
+  // ----- X-claim flow (link agent to your X account on dev.fun) -----
+  claimStatus: () =>
+    call<{
+      claimed: boolean;
+      hasClaimToken: boolean;
+      claimToken: string | null;
+      claimUrl: string | null;
+      xHandle: string | null;
+      xVerifiedAt: number | null;
+      status: string;
+    }>("GET", "/auth/claim/status"),
+  claimInit: () =>
+    call<{ claimToken: string; claimUrl: string; instructions: string }>(
+      "POST",
+      "/auth/claim/init",
+    ),
   introspection: () => call<unknown>("GET", "/__introspection"),
   competition: async (competitionId: string) =>
     call<unknown>("GET", "/competition", { query: { competitionId } }),

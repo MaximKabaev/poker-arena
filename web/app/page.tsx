@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PasswordGate } from "@/components/PasswordGate";
 import { RegisterForm } from "@/components/RegisterForm";
 import { AgentSwitcher, type AgentPublic } from "@/components/AgentSwitcher";
+import { ClaimSection } from "@/components/ClaimSection";
 import { PokerTable } from "@/components/PokerTable";
 import { ActionPanel } from "@/components/ActionPanel";
 import { EventFeed } from "@/components/EventFeed";
@@ -719,6 +720,8 @@ function MeStatsPanel({
               )}
             </div>
           </section>
+
+          <ClaimSection />
 
           <section>
             <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
