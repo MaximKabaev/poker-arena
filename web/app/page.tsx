@@ -32,6 +32,11 @@ interface LobbyView {
   error?: string;
 }
 
+type RebuyResult =
+  | { kind: "ok"; participant: { bankrollChips: number; totalChips: number; tableChips: number } }
+  | { kind: "payment_required"; payload: unknown; message?: string }
+  | { kind: "error"; message: string };
+
 interface LeaderboardEntry {
   arenaId?: string;
   arenaName?: string;
@@ -357,10 +362,20 @@ export default function Page() {
   }
 
   async function joinLobbyOnce() {
+    // Synchronous guard prevents double-fire from fast clicks (React state
+    // updates are async, so `submitting` alone wouldn't catch a back-to-back
+    // click in the same tick).
+    if (joinInFlightRef.current) return;
+    joinInFlightRef.current = true;
     setSubmitting(true);
     setSubmitMsg(null);
     try {
       const res = await clientFetch("/api/join", { method: "POST" });
+      if (res.status === 409) {
+        setProbablySeated(true);
+        setSubmitMsg("Arena says we're already queued or seated.");
+        return;
+      }
       const j = await res.json();
       if (!res.ok) setSubmitMsg(`✗ ${j.error || `HTTP ${res.status}`}`);
       else setSubmitMsg(`✓ ${j.kind ?? "joined"}`);
@@ -368,7 +383,29 @@ export default function Page() {
     } catch (e) {
       setSubmitMsg(`✗ ${(e as Error).message}`);
     } finally {
+      joinInFlightRef.current = false;
       setSubmitting(false);
+    }
+  }
+
+  // POST /api/rebuy. First call returns 402 with payment requirements which we
+  // pass straight back to the UI; user pays on-chain via the dev.fun dashboard
+  // / their wallet and the caller can retry with the resulting txHash.
+  async function attemptRebuy(txHash?: string): Promise<RebuyResult> {
+    try {
+      const res = await clientFetch("/api/rebuy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(txHash ? { txHash } : {}),
+      });
+      const j = await res.json();
+      if (res.status === 402) {
+        return { kind: "payment_required", payload: j.payload, message: j.error };
+      }
+      if (!res.ok) return { kind: "error", message: j.error || `HTTP ${res.status}` };
+      return { kind: "ok", participant: j.participant };
+    } catch (e) {
+      return { kind: "error", message: (e as Error).message };
     }
   }
 
@@ -504,6 +541,7 @@ export default function Page() {
           busy={submitting}
           note={submitMsg}
           probablySeated={probablySeated && !lobby?.inLobby}
+          onRebuy={attemptRebuy}
         />
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3 sm:gap-4">
@@ -760,6 +798,7 @@ function NoTable({
   busy,
   note,
   probablySeated,
+  onRebuy,
 }: {
   lobby: LobbyView | null;
   autoJoin: boolean;
@@ -767,7 +806,21 @@ function NoTable({
   busy: boolean;
   note: string | null;
   probablySeated?: boolean;
+  onRebuy: (txHash?: string) => Promise<RebuyResult>;
 }) {
+  const [rebuyResult, setRebuyResult] = useState<RebuyResult | null>(null);
+  const [rebuyBusy, setRebuyBusy] = useState(false);
+  const [txHash, setTxHash] = useState("");
+  async function runRebuy(hash?: string) {
+    setRebuyBusy(true);
+    try {
+      const r = await onRebuy(hash);
+      setRebuyResult(r);
+      if (r.kind === "ok") setTxHash("");
+    } finally {
+      setRebuyBusy(false);
+    }
+  }
   const [diag, setDiag] = useState<null | {
     me?: unknown;
     lobby?: unknown;
@@ -833,6 +886,63 @@ function NoTable({
         </div>
       )}
       {note && <div className="mt-3 text-xs text-zinc-400 break-words">{note}</div>}
+
+      <div className="mt-4 pt-3 border-t border-zinc-800 text-left">
+        <div className="flex items-center justify-between mb-1">
+          <div>
+            <div className="text-xs font-semibold text-zinc-300">Bankroll empty?</div>
+            <div className="text-[10px] text-zinc-500">
+              If 409 persists, your bot may need a rebuy (on-chain MON payment).
+            </div>
+          </div>
+          <button
+            onClick={() => runRebuy()}
+            disabled={rebuyBusy}
+            className="text-[11px] bg-amber-700/40 hover:bg-amber-700/60 border border-amber-600/60 text-amber-100 rounded px-2 py-1 disabled:opacity-50"
+          >
+            {rebuyBusy ? "..." : "Try rebuy"}
+          </button>
+        </div>
+        {rebuyResult?.kind === "ok" && (
+          <div className="mt-2 text-xs bg-emerald-900/30 border border-emerald-700/50 text-emerald-100 rounded p-2">
+            ✓ Rebuy succeeded. Bankroll:{" "}
+            <span className="font-mono">{rebuyResult.participant.bankrollChips.toLocaleString()}</span>{" "}
+            (total <span className="font-mono">{rebuyResult.participant.totalChips.toLocaleString()}</span>)
+          </div>
+        )}
+        {rebuyResult?.kind === "payment_required" && (
+          <div className="mt-2 text-[11px] bg-amber-950/60 border border-amber-700/60 text-amber-100 rounded p-2 space-y-1">
+            <div className="font-semibold">Payment required (402)</div>
+            <div className="text-zinc-300 break-words">
+              {rebuyResult.message || "Pay the amount below from the agent wallet on dev.fun, then paste the tx hash here and retry."}
+            </div>
+            <pre className="bg-zinc-950/60 border border-zinc-800 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words text-[10px] text-zinc-300 max-h-40 font-mono">
+              {JSON.stringify(rebuyResult.payload, null, 2)}
+            </pre>
+            <div className="flex gap-1.5 mt-1">
+              <input
+                type="text"
+                value={txHash}
+                onChange={(e) => setTxHash(e.target.value)}
+                placeholder="0x… tx hash from your wallet"
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-[10px] font-mono outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={() => runRebuy(txHash.trim())}
+                disabled={rebuyBusy || !txHash.trim()}
+                className="text-[11px] bg-emerald-700/40 hover:bg-emerald-700/60 border border-emerald-600/60 text-emerald-100 rounded px-2 py-1 disabled:opacity-50"
+              >
+                Retry with txHash
+              </button>
+            </div>
+          </div>
+        )}
+        {rebuyResult?.kind === "error" && (
+          <div className="mt-2 text-xs bg-red-950/60 border border-red-900 text-red-200 rounded p-2 break-words">
+            ✗ {rebuyResult.message}
+          </div>
+        )}
+      </div>
 
       <details className="mt-4 text-left" open={diag != null}>
         <summary

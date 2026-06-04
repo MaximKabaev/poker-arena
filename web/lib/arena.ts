@@ -194,6 +194,15 @@ export const arena = {
     call<{ kind: string; [k: string]: unknown }>("POST", "/texas/join", {
       body: txHash ? { competitionId, txHash } : { competitionId },
     }),
+  // Rebuy bankroll. First call returns 402 with payment requirements; pay
+  // MON from the agent wallet and retry with txHash. Surfaced as ArenaError(402)
+  // so the route can forward the payload to the client.
+  rebuy: (competitionId: string, txHash?: string) =>
+    call<{ participant: { bankrollChips: number; tableChips: number; totalChips: number; [k: string]: unknown } }>(
+      "POST",
+      "/texas/rebuy",
+      { body: txHash ? { competitionId, txHash } : { competitionId } },
+    ),
   lobby: (competitionId: string) =>
     call<{ lobby: LobbyState | null }>("GET", "/texas/lobby", { query: { competitionId } }),
   pendingActions: (competitionId: string) =>
