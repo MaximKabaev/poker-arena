@@ -106,36 +106,9 @@ def preflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decision
                 action="check", message="gg", layer="L1",
                 reasoning=_reasoning({"vr": "typ:limp field", "pp": "BB x", "ke": f"hand {code}"}),
             )
-        # SB unraised → always complete (per owner request) UNLESS the hand
-        # is strong enough to RFI, in which case still raise for value.
-        if hero_pos == "SB":
-            if code in R.RFI["SB"]:
-                to = _cap_to_allowed(_open_size_to(table, hero_pos), a)
-                return Decision(
-                    action="raise" if a.can_raise else "bet",
-                    amount=to, message="gg", layer="L1",
-                    reasoning=_reasoning({
-                        "vr": "typ:6max field", "ke": f"RFI {hero_pos}",
-                        "pp": "SB open", "sr": f"open {to // table.big_blind_chips}bb",
-                    }),
-                )
-            if a.can_call:
-                return Decision(
-                    action="call", message="gg", layer="L1",
-                    reasoning=_reasoning({
-                        "vr": "typ:unraised", "ke": f"complete {code}",
-                        "pp": "SB complete", "sr": f"always complete {a.call_chips}c",
-                    }),
-                )
-            if a.can_check:
-                return Decision(
-                    action="check", message="gg", layer="L1",
-                    reasoning=_reasoning({"vr": "typ:unraised", "pp": "SB x"}),
-                )
-            return Decision(
-                action="fold", message="gg", layer="L1",
-                reasoning=_reasoning({"vr": "typ:unraised", "pp": "SB no-call legal"}),
-            )
+        # SB unraised — REVERTED: always-completing junk is OOP -EV.
+        # Now: SB plays its RFI range for raise, LIMP_PLAYABLE for cheap call,
+        # else fold. Standard SB strategy in solvable spots.
         if hero_pos not in R.RFI:
             return None
         if code in R.RFI[hero_pos]:
@@ -152,14 +125,15 @@ def preflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decision
                     "sr": f"open {to // table.big_blind_chips}bb",
                 }),
             )
-        # Cheap limp — see a flop for 1-2 chips with implied-odds hands that
-        # didn't make the RFI cut. SB completing the BB is the canonical case;
-        # also fires for BTN/CO limping behind a folded-around pot.
+        # Cheap limp — see a flop for 1-2 chips with implied-odds hands.
+        # Gated to LP/blinds only — UTG/HJ limps are statistically bad (invite
+        # iso-raises and put us OOP for the entire hand).
         if (
             a.can_call
             and a.call_chips is not None
             and 0 < a.call_chips <= 2
             and code in R.LIMP_PLAYABLE
+            and hero_pos in ("CO", "BTN", "SB")
         ):
             return Decision(
                 action="call", message="gg", layer="L1",

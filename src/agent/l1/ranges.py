@@ -67,7 +67,9 @@ BB_CALL_VS_BLIND: frozenset[str] = expand_range(
 FOUR_BET_VALUE: frozenset[str] = expand_range("KK+, AKs")
 # Hands worth calling a 3-bet at 100bb+ depth — fold-to-3bet leak fix.
 # AKo, AQs, big pairs: too strong to fold, not in 4-bet value.
-CALL_VS_3BET: frozenset[str] = expand_range("88, 99, TT, JJ, QQ, AKo, AQs, AJs")
+CALL_VS_3BET: frozenset[str] = expand_range(
+    "77, 88, 99, TT, JJ, QQ, AKo, AQs, AQo, AJs, KQs, KJs, QJs, JTs"
+)
 
 # Facing a 4-bet+ (cold 4-bet, 5-bet, or deeper). Used as L1 chart so we never
 # safe-default-fold a monster when L2 times out (real bug: AcKs auto-folded for

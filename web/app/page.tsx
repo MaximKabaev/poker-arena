@@ -98,6 +98,13 @@ export default function Page() {
   // Tracks the current armed turn for timeout detection: (tableId, deadline).
   // Cleared when we successfully submit, or when the turn passes naturally.
   const armedTurnRef = useRef<{ tableId: string; deadline: number } | null>(null);
+  // Remembers turns we've successfully acted on so re-runs of the timeout
+  // effect (e.g. when autoJoin toggles) don't re-arm an already-resolved turn.
+  const actedTurnRef = useRef<{ tableId: string; deadline: number } | null>(null);
+  // Latest autoJoin value, read by the timeout timer's callback. Kept in a ref
+  // so the timeout effect doesn't need autoJoin in its deps (which used to
+  // cause toggling auto-rejoin to clobber armedTurnRef mid-turn).
+  const autoJoinRef = useRef<boolean>(false);
   // Tracks which tableId we're currently looking for in /texas/recent-tables.
   // When set, a retry loop is actively polling for that id; clearing it
   // aborts the loop.
@@ -135,6 +142,12 @@ export default function Page() {
     // pick up the result if Arena finally indexes the table.
   }, []);
 
+  // Mirror the latest autoJoin into a ref so the timer below can read the
+  // current value without forcing the effect to re-run on every toggle.
+  useEffect(() => {
+    autoJoinRef.current = autoJoin;
+  }, [autoJoin]);
+
   // Arm a timeout watcher whenever it's our turn. If the deadline passes
   // without a successful submitAction (which clears armedTurnRef), we treat it
   // as an auto-fold and stop auto-rejoin so we don't burn through games while
@@ -145,21 +158,35 @@ export default function Page() {
       table.actingSeatNumber != null && table.actingSeatNumber === table.selfSeatNumber;
     if (!isHero) return;
     const armed = { tableId: table.tableId, deadline: table.actionDeadlineAt };
+    // If we've already submitted for this exact turn, the effect re-running
+    // (e.g. because of an unrelated dep change in the past) must not re-arm
+    // and re-trigger the safety.
+    if (
+      actedTurnRef.current?.tableId === armed.tableId &&
+      actedTurnRef.current.deadline === armed.deadline
+    ) {
+      return;
+    }
     armedTurnRef.current = armed;
     const wait = armed.deadline * 1000 - Date.now() + 750;
+    // If the deadline is already in the past (stale state), don't arm — the
+    // server has either already auto-folded or the next poll will refresh.
+    if (wait <= 0) return;
     const id = setTimeout(() => {
       const cur = armedTurnRef.current;
       if (!cur) return;
       if (cur.tableId !== armed.tableId || cur.deadline !== armed.deadline) return;
-      // Still armed → submitAction was never called for this turn.
       armedTurnRef.current = null;
-      if (autoJoin) setAutoJoin(false);
+      if (autoJoinRef.current) setAutoJoin(false);
       setTimeoutNote(
         "⏱ Action timed out — auto-rejoin disabled. Click Auto-rejoin to resume.",
       );
-    }, Math.max(wait, 1000));
+    }, wait);
     return () => clearTimeout(id);
-  }, [table?.tableId, table?.actionDeadlineAt, table?.actingSeatNumber, table?.selfSeatNumber, autoJoin, table]);
+    // Deliberately omit autoJoin / table from deps — only the identity of the
+    // turn (tableId + deadline + hero seat) determines whether to arm.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table?.tableId, table?.actionDeadlineAt, table?.actingSeatNumber, table?.selfSeatNumber]);
 
   // Load notify preference and prime audio on the first user interaction.
   useEffect(() => {
@@ -383,6 +410,10 @@ export default function Page() {
         armedTurnRef.current = wasArmed; // restore — real timeout can still trip
       } else {
         setSubmitMsg(`✓ ${payload.action}${payload.amount ? ` ${payload.amount}` : ""}`);
+        // Remember this turn was successfully acted on so a later effect
+        // re-run (autoJoin toggle, table object identity change, etc.) can't
+        // wrongly re-arm the safety timer for the same turn.
+        if (wasArmed) actedTurnRef.current = wasArmed;
         // immediate re-poll
         setTimeout(fetchTable, 250);
       }
@@ -462,6 +493,9 @@ export default function Page() {
         );
       }
     } else {
+      // Clear any in-flight "armed/already queued" messages so the UI doesn't
+      // look like auto-join is still happening in this window.
+      setProbablySeated(false);
       setSubmitMsg("auto-rejoin stopped");
     }
   }

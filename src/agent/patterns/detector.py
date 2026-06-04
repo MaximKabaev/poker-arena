@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from .spots import SpotType
 from .store import ActionStore
 
-MIN_SAMPLE = 15            # observations of the spot before pattern can trigger
-MIN_SAMPLE_POSTFLOP = 10   # postflop samples accumulate slower
+MIN_SAMPLE = 10            # lowered from 15 — opponents rarely accrue that many
+MIN_SAMPLE_POSTFLOP = 8    # lowered from 10
 HIGH_CONFIDENCE = 0.70     # frequency threshold for "exploit me" pattern
 
 

@@ -6,6 +6,7 @@ from ..cards import hand_code
 from ..l1.positions import derive_positions
 from ..opponents import OpponentStats
 from ..state import Table
+from ..tools.range_equity import equity_summary
 
 SYSTEM_PROMPT = """You are a 6-max No-Limit Hold'em poker agent on the dev.fun Arena.
 Stacks reset to 100bb each hand. Your job: pick ONE legal action that maximizes EV.
@@ -63,6 +64,25 @@ def _recent_actions(table: Table, limit: int = 12) -> list[str]:
     return out
 
 
+def _range_equity_lines(table: Table) -> list[str]:
+    """Inject range-vs-range equity estimates so L2 doesn't anchor on
+    misleading 'vs random' equity (the bias that drove the 55 call leak)."""
+    hole = table.hero_hole_cards or []
+    if len(hole) != 2:
+        return []
+    try:
+        summary = equity_summary(hole, table.board_cards)
+    except Exception:
+        return ["- range equity: (computation failed)"]
+    return [
+        f"- equity vs 3-bet range (TT+/AK + suited blockers): {summary['vs_3bet_range']*100:.0f}%",
+        f"- equity vs 4-bet range (QQ+/AKs/AKo): {summary['vs_4bet_range']*100:.0f}%",
+        f"- equity vs value c-bet range (TT+/AQ+): {summary['vs_value_cbet']*100:.0f}%",
+        f"- equity vs wide open range (22+/Axs/broadway+): {summary['vs_wide_open']*100:.0f}%",
+        "  NOTE: 'vs random' overestimates equity in 3-bet+ pots. Use the line-specific numbers.",
+    ]
+
+
 def build_messages(
     table: Table,
     equity: float,
@@ -103,6 +123,7 @@ def build_messages(
         "",
         "PRECOMPUTED ESTIMATES",
         f"- equity vs random (MC n=200): {equity * 100:.1f}%",
+        *_range_equity_lines(table),
         "",
         "OPPONENTS",
         *(_opponent_lines(table, opp_stats) or ["  (no other seats with reads)"]),
