@@ -6,13 +6,12 @@ import { loadCreds } from "@/lib/creds";
 export async function GET(req: Request) {
   if (!(await isAuthed())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { searchParams } = new URL(req.url);
-  const agentId = searchParams.get("agentId");
-  if (!agentId) return NextResponse.json({ error: "agentId required" }, { status: 400 });
+  const limit = Math.max(1, Math.min(50, Number(searchParams.get("limit") ?? "15")));
   try {
     return await withRequestCreds(req, async () => {
       const creds = await loadCreds();
-      const stats = await arena.agentStats(creds.competitionId, agentId);
-      return NextResponse.json(stats);
+      const data = await arena.replays(creds.agentId, creds.competitionId, limit);
+      return NextResponse.json({ data });
     });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

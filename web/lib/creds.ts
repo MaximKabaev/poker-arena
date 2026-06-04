@@ -201,6 +201,21 @@ export async function loadCreds(): Promise<ArenaCreds> {
   return c;
 }
 
+// Pin to a specific agent (used when a request asks for an explicit agentId
+// via the x-agent-id header — required for running two tabs against two
+// different agents simultaneously).
+export async function loadCredsByAgentId(agentId: string): Promise<ArenaCreds> {
+  const store = await loadStore();
+  const a = store.agents.find((x) => x.agentId === agentId);
+  if (!a) throw new Error(`Agent ${agentId} not in local store.`);
+  return {
+    baseUrl: store.baseUrl,
+    apiKey: a.apiKey,
+    agentId: a.agentId,
+    competitionId: a.competitionId,
+  };
+}
+
 export async function getBaseUrl(): Promise<string> {
   const store = await loadStore();
   return store.baseUrl;

@@ -1,13 +1,20 @@
 // Server-side Arena HTTP client. Mirrors src/agent/arena_client.py.
 // All calls go through here so the API key stays on the server.
+//
+// Per-request agent selection: each call() reads its creds from an
+// AsyncLocalStorage context first. Routes use `withRequestCreds(req, fn)` to
+// scope a specific agent's creds to the work done in `fn`, so two windows
+// hitting the API with different `x-agent-id` headers don't collide.
 
-import { getBaseUrl, loadCreds } from "./creds";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { getBaseUrl, loadCreds, loadCredsByAgentId, type ArenaCreds } from "./creds";
 import type {
   ActionRequest,
   AgentMeRaw,
   AgentStats,
   LobbyState,
   RecentTable,
+  ReplayEntry,
   Table,
 } from "./types";
 
@@ -36,12 +43,27 @@ export class ArenaError extends Error {
   }
 }
 
+const credsCtx = new AsyncLocalStorage<ArenaCreds>();
+
+// Scope an arena.* call to a specific agent's creds. If no override is
+// provided, falls back to whichever agent is "active" in the store.
+export async function withRequestCreds<T>(
+  req: Request,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const headerAgentId = req.headers.get("x-agent-id");
+  const creds = headerAgentId
+    ? await loadCredsByAgentId(headerAgentId)
+    : await loadCreds();
+  return credsCtx.run(creds, fn);
+}
+
 async function call<T>(
   method: "GET" | "POST" | "PATCH",
   pathSuffix: string,
   opts: { query?: Record<string, string | undefined>; body?: unknown } = {},
 ): Promise<T> {
-  const creds = await loadCreds();
+  const creds = credsCtx.getStore() ?? (await loadCreds());
   const url = new URL(`${creds.baseUrl}${ARENA_PREFIX}${pathSuffix}`);
   if (opts.query) {
     for (const [k, v] of Object.entries(opts.query)) {
@@ -198,4 +220,13 @@ export const arena = {
     call<{ total: number; data: RecentTable[] }>("GET", "/texas/recent-tables", {
       query: { competitionId, limit: String(limit) },
     }),
+  // Per-agent per-hand replay list. Path param is the agent id; query param
+  // narrows to a single competition. Auth=false at Arena, but we still route
+  // through `call()` so the active agent's competition is naturally scoped.
+  replays: (agentId: string, competitionId: string, limit = 20) =>
+    call<ReplayEntry[]>(
+      "GET",
+      `/agent/${encodeURIComponent(agentId)}/replays`,
+      { query: { competitionId, limit: String(limit) } },
+    ),
 };

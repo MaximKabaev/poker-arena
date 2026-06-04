@@ -239,5 +239,43 @@ def preflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decision
             reasoning=_reasoning({"vr": "ln:3bet val", "pp": "fold to 3bet", "ke": code}),
         )
 
-    # 4-bet+ pots → escalate.
+    # ---- 4-bet+ pots: minimal chart so we don't safe-default-fold a monster ----
+    # If L2 fires & succeeds, this branch is bypassed (L1 returns None first when
+    # ctx is provided AND we want L2 to handle exotic spots). But if L2 fails
+    # (timeout, error), decide() re-calls l1_decide(table, ctx=None) and lands
+    # here — guaranteeing a sane action with premium hands.
+    if raises >= 3:
+        # Escalate to L2 when ctx is available (L2 may exploit better).
+        if ctx is not None:
+            return None
+        # ctx=None means we are the L2-failure fallback. Play the chart.
+        if code in R.FIVE_BET_SHOVE and a.can_all_in:
+            return Decision(
+                action="all-in",
+                amount=a.all_in_to_amount or a.max_commit,
+                message="gg", layer="L1",
+                reasoning=_reasoning({
+                    "vr": "ln:4bet+ val", "ke": f"5bet shove {code}",
+                    "pp": f"{hero_pos} jam", "sr": "AA only",
+                }),
+            )
+        if code in R.CALL_VS_4BET_PLUS and a.can_call:
+            return Decision(
+                action="call", message="gg", layer="L1",
+                reasoning=_reasoning({
+                    "vr": "ln:4bet+ val", "ke": f"call {code}",
+                    "pp": f"{hero_pos} flat",
+                    "sr": "premium realise eq",
+                }),
+            )
+        if a.can_check:
+            return Decision(
+                action="check", message="gg", layer="L1",
+                reasoning=_reasoning({"vr": "ln:4bet+", "pp": "x off-chart"}),
+            )
+        return Decision(
+            action="fold", message="gg", layer="L1",
+            reasoning=_reasoning({"vr": "ln:4bet+", "pp": "fold non-premium", "ke": code}),
+        )
+
     return None

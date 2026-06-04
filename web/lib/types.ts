@@ -150,6 +150,15 @@ export interface RecentTableWinner {
   message?: string | null;
 }
 
+export interface ReplayEntry {
+  handId: string;
+  tableId: string;
+  settledAt: number; // ms
+  chipDelta: number;
+  winnerHandle: string | null;
+  replayUrl: string;
+}
+
 export interface RecentTable {
   id: string;
   tableNumber: number;

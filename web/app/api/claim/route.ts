@@ -4,13 +4,15 @@
 
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/session";
-import { arena, ArenaError } from "@/lib/arena";
+import { arena, ArenaError, withRequestCreds } from "@/lib/arena";
 
-export async function GET() {
+export async function GET(req: Request) {
   if (!(await isAuthed())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   try {
-    const s = await arena.claimStatus();
-    return NextResponse.json(s);
+    return await withRequestCreds(req, async () => {
+      const s = await arena.claimStatus();
+      return NextResponse.json(s);
+    });
   } catch (e) {
     if (e instanceof ArenaError) {
       return NextResponse.json({ error: e.message, payload: e.payload }, { status: e.status });
@@ -19,11 +21,13 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   if (!(await isAuthed())) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   try {
-    const r = await arena.claimInit();
-    return NextResponse.json(r);
+    return await withRequestCreds(req, async () => {
+      const r = await arena.claimInit();
+      return NextResponse.json(r);
+    });
   } catch (e) {
     if (e instanceof ArenaError) {
       return NextResponse.json({ error: e.message, payload: e.payload }, { status: e.status });

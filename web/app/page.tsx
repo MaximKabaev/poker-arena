@@ -16,10 +16,12 @@ import {
   notifyYourTurn,
   primeNotify,
 } from "@/lib/notify";
+import { clientFetch } from "@/lib/clientFetch";
 import type {
   ActionType,
   AgentStats,
   RecentTable,
+  ReplayEntry,
   Table,
 } from "@/lib/types";
 
@@ -79,6 +81,7 @@ export default function Page() {
   const [statsPanelOpen, setStatsPanelOpen] = useState(false);
   const [lastResult, setLastResult] = useState<RecentTable | null>(null);
   const [timeoutNote, setTimeoutNote] = useState<string | null>(null);
+  const [replays, setReplays] = useState<ReplayEntry[] | null>(null);
   const statsRequestedRef = useRef<Set<string>>(new Set());
   const prevTableIdRef = useRef<string | null>(null);
   const prevHeroActingRef = useRef<boolean>(false);
@@ -175,7 +178,7 @@ export default function Page() {
   // ----- after auth+claim, fetch agent me + start polling -----
   const fetchMe = useCallback(async () => {
     try {
-      const m = await fetch("/api/agent").then((r) => r.json());
+      const m = await clientFetch("/api/agent").then((r) => r.json());
       if (!m.error) setMe(m);
     } catch {}
   }, []);
@@ -208,7 +211,7 @@ export default function Page() {
 
   const fetchTable = useCallback(async () => {
     try {
-      const r = await fetch("/api/table");
+      const r = await clientFetch("/api/table");
       const j = await r.json();
       if (j.error) {
         setLastErr(j.error);
@@ -243,7 +246,7 @@ export default function Page() {
           if (!aid) continue;
           if (!statsRequestedRef.current.has(aid)) {
             statsRequestedRef.current.add(aid);
-            fetch(`/api/stats?agentId=${encodeURIComponent(aid)}`)
+            clientFetch(`/api/stats?agentId=${encodeURIComponent(aid)}`)
               .then((r) => r.json())
               .then((s) => {
                 if (s.error) return;
@@ -255,7 +258,7 @@ export default function Page() {
           if (aid === t.seats.find((x) => x.seatNumber === t.selfSeatNumber)?.agentId) continue;
           if (!summariesRequestedRef.current.has(aid)) {
             summariesRequestedRef.current.add(aid);
-            fetch(`/api/opponent-summary?agentId=${encodeURIComponent(aid)}`)
+            clientFetch(`/api/opponent-summary?agentId=${encodeURIComponent(aid)}`)
               .then((r) => r.json())
               .then((s) => {
                 if (s.summary) {
@@ -268,7 +271,7 @@ export default function Page() {
       } else {
         // No table this tick. Keep displaying the last one as the "waiting"
         // view, but also poll lobby state to detect session end vs mid-hand.
-        const lob: LobbyView | null = await fetch("/api/lobby")
+        const lob: LobbyView | null = await clientFetch("/api/lobby")
           .then((r) => r.json())
           .catch(() => null);
         setLobby(lob);
@@ -282,7 +285,7 @@ export default function Page() {
         // show the opponent showdown cards + winner. Use the prior tableId to
         // ensure we only fetch once per session.
         if (lastSeenTable && lastResultFetchedRef.current === lastSeenTable.tableId) {
-          fetch(`/api/recent-tables?limit=5`)
+          clientFetch(`/api/recent-tables?limit=5`)
             .then((r) => r.json())
             .then((j) => {
               const arr: RecentTable[] | undefined = (j as { data?: RecentTable[] })?.data;
@@ -320,7 +323,7 @@ export default function Page() {
     setSubmitting(true);
     setSubmitMsg(null);
     try {
-      const res = await fetch("/api/action", {
+      const res = await clientFetch("/api/action", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ tableId: table.tableId, ...payload }),
@@ -347,7 +350,7 @@ export default function Page() {
     setSubmitting(true);
     setSubmitMsg(null);
     try {
-      const res = await fetch("/api/join", { method: "POST" });
+      const res = await clientFetch("/api/join", { method: "POST" });
       const j = await res.json();
       if (!res.ok) setSubmitMsg(`✗ ${j.error || `HTTP ${res.status}`}`);
       else setSubmitMsg(`✓ ${j.kind ?? "joined"}`);
@@ -388,6 +391,14 @@ export default function Page() {
     location.reload();
   }
 
+  async function loadReplays() {
+    try {
+      const res = await clientFetch("/api/replays?limit=15");
+      const j = await res.json();
+      if (Array.isArray(j.data)) setReplays(j.data);
+    } catch {}
+  }
+
   if (phase === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center text-zinc-500">
@@ -405,6 +416,17 @@ export default function Page() {
   // a "waiting" view so the user keeps context between turns/hands.
   const displayTable = table ?? lastSeenTable;
   const isStaleView = !table && !!lastSeenTable;
+  // Detect when hero is sidelined for the rest of the hand — useful because
+  // pending-actions won't return the table again until a new hand begins (or
+  // not at all if we busted out).
+  const heroSeat = displayTable?.seats.find(
+    (s) => s.seatNumber === displayTable.selfSeatNumber,
+  );
+  const heroSidelined =
+    !!heroSeat &&
+    (heroSeat.status === "AllIn" ||
+      heroSeat.status === "Folded" ||
+      (heroSeat.stackChips === 0 && heroSeat.status !== "Active"));
   const selfSeat = displayTable?.seats.find(
     (s) => s.seatNumber === displayTable.selfSeatNumber,
   );
@@ -475,7 +497,21 @@ export default function Page() {
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3 sm:gap-4">
           <div className="space-y-3 sm:space-y-4 min-w-0">
-            {isStaleView && (
+            {heroSidelined && (
+              <div className="bg-red-900/30 border border-red-700/50 text-red-100 rounded-xl px-3 py-2 text-xs sm:text-sm">
+                <span className="font-semibold">
+                  {heroSeat?.status === "AllIn"
+                    ? "You're all-in."
+                    : heroSeat?.stackChips === 0
+                    ? "You're busted — stack 0."
+                    : "You've folded this hand."}
+                </span>{" "}
+                Arena won't push table updates again until either a new hand starts (if you
+                still have chips) or the session ends. The final board + every opponent's
+                showdown cards will appear below when the table closes.
+              </div>
+            )}
+            {!heroSidelined && isStaleView && (
               <div className="bg-amber-900/30 border border-amber-700/50 text-amber-200 rounded-xl px-3 py-2 text-xs sm:text-sm">
                 Waiting for the next turn / hand — showing the last known state.
                 {lobby?.inLobby && " (you're back in the lobby)"}
@@ -539,6 +575,8 @@ export default function Page() {
           selfStackChips={selfSeat?.stackChips ?? null}
           selfBigBlind={displayTable?.bigBlindChips ?? null}
           lobby={lobby}
+          replays={replays}
+          onLoadReplays={loadReplays}
           onClose={() => setStatsPanelOpen(false)}
         />
       )}
@@ -594,7 +632,7 @@ function Header({
           <AgentSwitcher
             agents={agentsInfo.agents}
             max={agentsInfo.max}
-            onSwitched={onAgentsChanged}
+            onAgentsChanged={onAgentsChanged}
             onAddNew={onAddNew}
           />
         )}
@@ -757,16 +795,24 @@ function MeStatsPanel({
   selfStackChips,
   selfBigBlind,
   lobby,
+  replays,
+  onLoadReplays,
   onClose,
 }: {
   me: AgentMe | null;
   selfStackChips: number | null;
   selfBigBlind: number | null;
   lobby: LobbyView | null;
+  replays: ReplayEntry[] | null;
+  onLoadReplays: () => void;
   onClose: () => void;
 }) {
   const board = me?.leaderboard ?? [];
   const stackBB = selfStackChips != null && selfBigBlind ? selfStackChips / selfBigBlind : null;
+  useEffect(() => {
+    onLoadReplays();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm px-3 py-6">
       <div
@@ -835,6 +881,61 @@ function MeStatsPanel({
           </section>
 
           <ClaimSection />
+
+          <section>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-[10px] uppercase tracking-wide text-zinc-500">
+                Recent hands
+              </h3>
+              <button
+                onClick={onLoadReplays}
+                className="text-[10px] text-zinc-500 hover:text-zinc-300 underline"
+              >
+                refresh
+              </button>
+            </div>
+            {replays == null ? (
+              <div className="text-xs text-zinc-500">Loading…</div>
+            ) : replays.length === 0 ? (
+              <div className="text-xs text-zinc-500">No settled hands yet.</div>
+            ) : (
+              <ul className="space-y-1 max-h-60 overflow-y-auto scrollbar-thin pr-1">
+                {replays.map((h) => {
+                  const won = h.chipDelta > 0;
+                  const lost = h.chipDelta < 0;
+                  return (
+                    <li
+                      key={h.handId}
+                      className="flex items-center gap-2 bg-zinc-800/60 rounded px-2 py-1.5 text-xs"
+                    >
+                      <span
+                        className={`font-mono w-16 text-right shrink-0 ${
+                          won ? "text-emerald-300" : lost ? "text-red-300" : "text-zinc-400"
+                        }`}
+                      >
+                        {h.chipDelta >= 0 ? "+" : ""}
+                        {h.chipDelta.toLocaleString()}
+                      </span>
+                      <span className="text-[10px] text-zinc-500 truncate flex-1">
+                        won by{" "}
+                        <span className="text-zinc-300">
+                          {h.winnerHandle ? `@${h.winnerHandle}` : "—"}
+                        </span>
+                      </span>
+                      <a
+                        href={h.replayUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-300 hover:underline text-[11px] shrink-0"
+                      >
+                        replay ↗
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
 
           <section>
             <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">

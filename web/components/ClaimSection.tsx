@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { clientFetch } from "@/lib/clientFetch";
 
 interface ClaimStatus {
   claimed: boolean;
@@ -32,7 +33,7 @@ export function ClaimSection() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch("/api/claim");
+        const res = await clientFetch("/api/claim");
         const j = (await res.json()) as ClaimStatus | { error: string };
         if (cancelled) return;
         if ("error" in j) {
@@ -61,7 +62,7 @@ export function ClaimSection() {
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch("/api/claim", { method: "POST" });
+      const res = await clientFetch("/api/claim", { method: "POST" });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
       setInit(j as ClaimInit);

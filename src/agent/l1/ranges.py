@@ -69,6 +69,12 @@ FOUR_BET_VALUE: frozenset[str] = expand_range("KK+, AKs")
 # AKo, AQs, big pairs: too strong to fold, not in 4-bet value.
 CALL_VS_3BET: frozenset[str] = expand_range("88, 99, TT, JJ, QQ, AKo, AQs, AJs")
 
+# Facing a 4-bet+ (cold 4-bet, 5-bet, or deeper). Used as L1 chart so we never
+# safe-default-fold a monster when L2 times out (real bug: AcKs auto-folded for
+# -24 chips when L2 hit the 30s ceiling on a 4-bet pot).
+FIVE_BET_SHOVE: frozenset[str] = expand_range("AA")
+CALL_VS_4BET_PLUS: frozenset[str] = expand_range("KK, QQ, AKs, AKo")
+
 # Hands that are playable cheaply but NOT in our RFI range. Used to limp-in
 # (just call the blind) when nobody raised and we can see a flop for 1-2 chips —
 # typically completing the SB or limping behind from BTN/CO in a folded-around pot.

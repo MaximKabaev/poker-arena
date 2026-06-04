@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/session";
-import { arena, ArenaError } from "@/lib/arena";
+import { arena, ArenaError, withRequestCreds } from "@/lib/arena";
 import type { ActionRequest } from "@/lib/types";
 
 export async function POST(req: Request) {
@@ -18,14 +18,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "message is required (1-500 chars)" }, { status: 400 });
   }
   try {
-    const result = await arena.submitAction({
-      tableId: body.tableId,
-      action: body.action,
-      amount: body.amount ?? null,
-      message: body.message,
-      reasoning: body.reasoning,
+    return await withRequestCreds(req, async () => {
+      const result = await arena.submitAction({
+        tableId: body.tableId!,
+        action: body.action!,
+        amount: body.amount ?? null,
+        message: body.message!,
+        reasoning: body.reasoning,
+      });
+      return NextResponse.json({ ok: true, result });
     });
-    return NextResponse.json({ ok: true, result });
   } catch (e) {
     if (e instanceof ArenaError) {
       return NextResponse.json(
