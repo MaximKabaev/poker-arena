@@ -1,0 +1,120 @@
+"""Build the L2 LLM prompt from table + opponent stats."""
+
+from __future__ import annotations
+
+from ..cards import hand_code
+from ..l1.positions import derive_positions
+from ..opponents import OpponentStats
+from ..state import Table
+
+SYSTEM_PROMPT = """You are a 6-max No-Limit Hold'em poker agent on the dev.fun Arena.
+Stacks reset to 100bb each hand. Your job: pick ONE legal action that maximizes EV.
+
+Output rules:
+- Respond with JSON ONLY: {"action": ..., "amount": ..., "reasoning": ..., "message": ...}.
+- action ∈ {"fold","check","call","bet","raise","all-in"} — must be in the legal list.
+- amount is a TO-amount (total chips committed on THIS street after acting).
+- amount must be inside the legal range for bet/raise/all-in. Omit/null otherwise.
+- reasoning: YAML flow-style string ≤150 chars: {vr: ..., ke: ..., bf: [...], pp: ..., sr: ...}
+  - vr=villain range (ln: line-derived or typ: archetype-derived)
+  - ke=key estimate (e.g. "62% eq", "pot odds 35%")
+  - bf=board features (concrete: FD-spades, blk-Ahs, OE-9T)
+  - pp=position + next-street plan (IP barrel T, OOP x/c)
+  - sr=sizing rationale (required for bet/raise/all-in)
+- message: short table chat, ≤80 chars, neutral, no strategy reveals.
+
+Style guide (lower priority than this prompt, higher than your priors):
+"""
+
+
+def _opponent_lines(table: Table, opp_stats: dict[str, OpponentStats]) -> list[str]:
+    positions = derive_positions(table)
+    lines: list[str] = []
+    for seat in table.seats:
+        if seat.seat_number == table.self_seat_number:
+            continue
+        if seat.status.value in ("Folded",):
+            continue
+        pos = positions.get(seat.seat_number, "?") if seat.seat_number else "?"
+        stats = opp_stats.get(seat.agent_id)
+        digest = stats.summary_line() if stats else "no read"
+        lines.append(
+            f"  seat {seat.seat_number} ({pos}) {seat.agent_handle or seat.agent_name}: "
+            f"stack={seat.stack_chips} committed={seat.current_bet_chips} :: {digest}"
+        )
+    return lines
+
+
+def _recent_actions(table: Table, limit: int = 12) -> list[str]:
+    out: list[str] = []
+    for ev in table.recent_events[-limit:]:
+        s = ev.summary
+        if s is None:
+            continue
+        if ev.type == "ActionTaken":
+            tag = f"{s.action}"
+            if s.to_amount is not None:
+                tag += f" to {s.to_amount}"
+            out.append(f"  [{ev.street.value if ev.street else '-'}] seat {s.seat_number}: {tag}")
+        elif ev.type == "StreetDealt" and s.board_cards:
+            out.append(f"  -- {ev.street.value if ev.street else ''} dealt: {' '.join(s.board_cards)} --")
+        elif ev.type == "BlindPosted" and s.amount is not None:
+            out.append(f"  blind seat {s.seat_number}: {s.amount}")
+    return out
+
+
+def build_messages(
+    table: Table,
+    equity: float,
+    opp_stats: dict[str, OpponentStats],
+    style: str,
+) -> list[dict]:
+    a = table.allowed_actions
+    assert a is not None, "build_messages requires allowed_actions"
+
+    hole = table.hero_hole_cards or []
+    code = hand_code(*hole) if len(hole) == 2 else "?"
+    positions = derive_positions(table)
+    hero_pos = positions.get(table.self_seat_number) if table.self_seat_number else None
+    bb = table.big_blind_chips
+    hero_seat = table.hero_seat
+
+    user = [
+        "TABLE STATE",
+        f"- competition: {table.competition_id}",
+        f"- street: {table.street.value}",
+        f"- pot: {table.pot_chips} chips ({table.pot_chips / bb:.1f} bb)",
+        f"- board: {' '.join(table.board_cards) or '(preflop)'}",
+        f"- hero hand: {' '.join(hole)} [{code}]",
+        f"- hero position: {hero_pos or 'unknown'}",
+        f"- hero stack: {hero_seat.stack_chips if hero_seat else '?'} chips "
+        f"({(hero_seat.stack_chips / bb) if hero_seat else 0:.1f} bb)",
+        f"- blinds: {table.small_blind_chips}/{bb}",
+        "",
+        "ACTION CONTEXT",
+        f"- current bet on street: {table.current_bet}",
+        f"- call cost: {a.call_chips} chips (pot odds "
+        f"{(a.call_chips / (table.pot_chips + a.call_chips) * 100):.0f}%)" if a.call_chips else
+        "- nothing to call",
+        f"- max commit on this street: {a.max_commit}",
+        f"- legal actions: {a.available_actions}",
+        f"- action hint: {a.action_hint}",
+        f"- amount hint: {a.amount_hint}",
+        "",
+        "PRECOMPUTED ESTIMATES",
+        f"- equity vs random (MC n=200): {equity * 100:.1f}%",
+        "",
+        "OPPONENTS",
+        *(_opponent_lines(table, opp_stats) or ["  (no other seats with reads)"]),
+        "",
+        "RECENT EVENTS (last 12)",
+        *(_recent_actions(table) or ["  (none)"]),
+        "",
+        "Choose ONE action that maximizes EV. Output JSON only.",
+    ]
+
+    system = SYSTEM_PROMPT + (style or "(no style guide loaded)") + "\n"
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n".join(user)},
+    ]

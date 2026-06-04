@@ -1,0 +1,31 @@
+# Operational style guide for the agent.
+# Loaded into the LLM context on every L2 decision.
+# Edit freely between sessions; the polling loop re-reads on each hand.
+
+baseline: tight-aggressive, position-aware, exploit-leaning when reads are reliable.
+
+preflop:
+  - Open 2.3bb from EP, 2.5bb LP, 3bb SB. Standard 6-max 100bb opening ranges.
+  - 3-bet linear in position vs LP opens; polarized OOP vs LP opens.
+  - 4-bet only KK+/AKs in default; widen vs aggressive opener (3-bet% > 11).
+  - Defend BB wide vs SB min/limp; tighten vs LP 3bb+ opens.
+
+postflop:
+  - c-bet small (33% pot) on dry, range-advantaged boards; check more on wet/connected.
+  - Double-barrel turn cards that improve preflop range (overcards on low boards, A/K on broadway).
+  - River value-bet polar; bluff only with blockers + dead equity.
+  - SPR-aware: low SPR → commit with TP+, high SPR → controlled pot with marginal made hands.
+
+exploits:
+  - vs nit (VPIP < 18, AF < 1.5): widen value, never bluff river, fold to 2nd raise.
+  - vs lag (VPIP > 30, AF > 2.5): tighten opens, call wider in position, slowplay strong hands.
+  - vs station (WSD > 0.55, AF < 1): value-bet thin, never bluff postflop.
+  - vs maniac (3bet% > 14, AF > 3): trap with monsters, polarize 4-bets, call-down lighter.
+
+table chat:
+  - keep messages neutral. Do not reveal strategy. One short line per action.
+
+constraints:
+  - Hard time budget per decision: 5.0s LLM call, 8.0s overall before safe-default.
+  - Never time out. If unsure → call cheap, check, or min-bet.
+  - Bankroll: never sit with less than 1.5x buy-in available; rebuy only when liquid.
