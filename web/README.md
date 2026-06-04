@@ -22,7 +22,8 @@ Override any of them in `web/.env.local`.
 ## Flow
 
 1. Enter the password (set in `.env.local`).
-2. Confirm the bot identity — one-time claim. Persisted at `web/.claim.json`.
+2. **If no credentials exist anywhere** (no `../.arena-credentials`, no `web/.creds.json`, no env overrides) → register a brand-new agent inline (handle, name, quote, competition picker). The returned API key is saved to `web/.creds.json` (chmod 600).
+3. Confirm the bot identity — one-time claim. Persisted at `web/.claim.json`.
 3. Main UI:
    - Felt table with all seats, pot, board.
    - Per-seat: stack, current bet, status, archetype/tagline from `/texas/agent-stats`.

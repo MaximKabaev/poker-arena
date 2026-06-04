@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PasswordGate } from "@/components/PasswordGate";
 import { ClaimForm } from "@/components/ClaimForm";
+import { RegisterForm } from "@/components/RegisterForm";
 import { PokerTable } from "@/components/PokerTable";
 import { ActionPanel } from "@/components/ActionPanel";
 import { EventFeed } from "@/components/EventFeed";
@@ -12,7 +13,7 @@ import type {
   Table,
 } from "@/lib/types";
 
-type Phase = "loading" | "auth" | "claim" | "ready";
+type Phase = "loading" | "auth" | "register" | "claim" | "ready";
 
 interface AgentMe {
   agentId: string;
@@ -57,6 +58,8 @@ export default function Page() {
         if (c.claimed) {
           setClaim(c);
           setPhase("ready");
+        } else if (c.needsRegistration) {
+          setPhase("register");
         } else {
           setPhase("claim");
         }
@@ -181,6 +184,7 @@ export default function Page() {
     );
   }
   if (phase === "auth") return <PasswordGate onAuthed={() => location.reload()} />;
+  if (phase === "register") return <RegisterForm onRegistered={() => location.reload()} />;
   if (phase === "claim") return <ClaimForm onClaimed={() => location.reload()} />;
 
   const isHeroActing =

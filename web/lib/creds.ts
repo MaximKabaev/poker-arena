@@ -1,6 +1,8 @@
 // Server-side credentials & claim state.
-// Defaults: read from ../.arena-credentials and ../.env (the Python agent's files).
-// Overrides: web/.env.local (ARENA_API_KEY, ARENA_AGENT_ID, COMPETITION_ID, ARENA_BASE_URL).
+// Precedence for credentials:
+//   1. web/.creds.json (written by the in-app registration flow)
+//   2. web/.env.local (process.env)
+//   3. ../.arena-credentials and ../.env (the Python agent's files)
 // Claim state is persisted at web/.claim.json so the user only claims once.
 
 import { promises as fs } from "node:fs";
@@ -9,6 +11,7 @@ import path from "node:path";
 const PROJECT_ROOT = path.resolve(process.cwd(), "..");
 const ARENA_CREDS_PATH = path.join(PROJECT_ROOT, ".arena-credentials");
 const ARENA_ENV_PATH = path.join(PROJECT_ROOT, ".env");
+const WEB_CREDS_PATH = path.join(process.cwd(), ".creds.json");
 const CLAIM_PATH = path.join(process.cwd(), ".claim.json");
 
 export interface ArenaCreds {
@@ -24,6 +27,13 @@ export interface ClaimRecord {
   agentHandle?: string;
   agentName?: string;
   competitionId: string;
+}
+
+interface WebCredsFile {
+  baseUrl?: string;
+  apiKey?: string;
+  agentId?: string;
+  competitionId?: string;
 }
 
 async function readJsonSafe<T>(p: string): Promise<T | null> {
@@ -59,32 +69,74 @@ async function readDotenvSafe(p: string): Promise<Record<string, string>> {
 
 let _cached: ArenaCreds | null = null;
 
-export async function loadCreds(): Promise<ArenaCreds> {
+function invalidateCache() {
+  _cached = null;
+}
+
+export async function getBaseUrl(): Promise<string> {
+  const envFile = await readDotenvSafe(ARENA_ENV_PATH);
+  const web = await readJsonSafe<WebCredsFile>(WEB_CREDS_PATH);
+  return (
+    web?.baseUrl ||
+    process.env.ARENA_BASE_URL ||
+    envFile.ARENA_BASE_URL ||
+    "https://arena.dev.fun"
+  ).replace(/\/$/, "");
+}
+
+export async function tryLoadCreds(): Promise<ArenaCreds | null> {
   if (_cached) return _cached;
 
+  const webCreds = await readJsonSafe<WebCredsFile>(WEB_CREDS_PATH);
   const envFile = await readDotenvSafe(ARENA_ENV_PATH);
-  const arenaCreds = await readJsonSafe<{
-    apiKey?: string;
-    agentId?: string;
-  }>(ARENA_CREDS_PATH);
+  const arenaCreds = await readJsonSafe<{ apiKey?: string; agentId?: string }>(
+    ARENA_CREDS_PATH,
+  );
 
-  const baseUrl =
-    process.env.ARENA_BASE_URL || envFile.ARENA_BASE_URL || "https://arena.dev.fun";
-  const apiKey = process.env.ARENA_API_KEY || arenaCreds?.apiKey || envFile.ARENA_API_KEY || "";
+  const baseUrl = (
+    webCreds?.baseUrl ||
+    process.env.ARENA_BASE_URL ||
+    envFile.ARENA_BASE_URL ||
+    "https://arena.dev.fun"
+  ).replace(/\/$/, "");
+
+  const apiKey =
+    webCreds?.apiKey ||
+    process.env.ARENA_API_KEY ||
+    arenaCreds?.apiKey ||
+    envFile.ARENA_API_KEY ||
+    "";
   const agentId =
-    process.env.ARENA_AGENT_ID || arenaCreds?.agentId || envFile.ARENA_AGENT_ID || "";
+    webCreds?.agentId ||
+    process.env.ARENA_AGENT_ID ||
+    arenaCreds?.agentId ||
+    envFile.ARENA_AGENT_ID ||
+    "";
   const competitionId =
-    process.env.COMPETITION_ID || envFile.COMPETITION_ID || "";
+    webCreds?.competitionId ||
+    process.env.COMPETITION_ID ||
+    envFile.COMPETITION_ID ||
+    "";
 
-  if (!apiKey || !agentId || !competitionId) {
+  if (!apiKey || !agentId || !competitionId) return null;
+
+  _cached = { baseUrl, apiKey, agentId, competitionId };
+  return _cached;
+}
+
+export async function loadCreds(): Promise<ArenaCreds> {
+  const c = await tryLoadCreds();
+  if (!c) {
     throw new Error(
-      `Missing arena credentials. apiKey=${!!apiKey} agentId=${!!agentId} competitionId=${!!competitionId}. ` +
-        `Set web/.env.local or ensure ${ARENA_CREDS_PATH} and ${ARENA_ENV_PATH} exist.`,
+      "Missing arena credentials. Register an agent through the web UI or populate ../.arena-credentials and ../.env.",
     );
   }
+  return c;
+}
 
-  _cached = { baseUrl: baseUrl.replace(/\/$/, ""), apiKey, agentId, competitionId };
-  return _cached;
+export async function saveWebCreds(c: ArenaCreds): Promise<void> {
+  await fs.writeFile(WEB_CREDS_PATH, JSON.stringify(c, null, 2), { mode: 0o600 });
+  invalidateCache();
 }
 
 export async function getClaim(): Promise<ClaimRecord | null> {

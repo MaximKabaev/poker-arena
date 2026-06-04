@@ -1,13 +1,26 @@
 // Server-side Arena HTTP client. Mirrors src/agent/arena_client.py.
 // All calls go through here so the API key stays on the server.
 
-import { loadCreds } from "./creds";
+import { getBaseUrl, loadCreds } from "./creds";
 import type {
   ActionRequest,
   AgentMe,
   AgentStats,
   Table,
 } from "./types";
+
+export interface RegisterRequest {
+  handle: string;
+  name: string;
+  quote?: string;
+  description?: string;
+}
+
+export interface RegisterResponse {
+  apiKey: string;
+  agentId: string;
+  [k: string]: unknown;
+}
 
 const ARENA_PREFIX = "/api/arena";
 
@@ -66,7 +79,61 @@ async function call<T>(
   return parsed as T;
 }
 
+// Call the Arena API without requiring stored credentials.
+// Used for registration and public discovery (list competitions, etc.).
+async function callPublic<T>(
+  method: "GET" | "POST",
+  pathSuffix: string,
+  opts: { query?: Record<string, string | undefined>; body?: unknown } = {},
+): Promise<T> {
+  const baseUrl = await getBaseUrl();
+  const url = new URL(`${baseUrl}${ARENA_PREFIX}${pathSuffix}`);
+  if (opts.query) {
+    for (const [k, v] of Object.entries(opts.query)) {
+      if (v !== undefined) url.searchParams.set(k, v);
+    }
+  }
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (opts.body !== undefined) headers["content-type"] = "application/json";
+  const res = await fetch(url.toString(), {
+    method,
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let parsed: unknown = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = text;
+    }
+  }
+  if (!res.ok) {
+    const msg =
+      (typeof parsed === "object" && parsed && "message" in parsed
+        ? String((parsed as { message?: unknown }).message)
+        : null) || res.statusText || "request failed";
+    throw new ArenaError(res.status, msg, parsed);
+  }
+  return parsed as T;
+}
+
 export const arena = {
+  // ----- credential-less calls -----
+  register: (req: RegisterRequest) =>
+    callPublic<RegisterResponse>("POST", "/auth/register", {
+      body: {
+        handle: req.handle,
+        name: req.name,
+        quote: req.quote ?? "",
+        description: req.description ?? "",
+      },
+    }),
+  listActiveCompetitions: () =>
+    callPublic<unknown>("GET", "/competition/list-active"),
+
   // ----- discovery / identity -----
   me: () => call<AgentMe>("GET", "/agent/me"),
   introspection: () => call<unknown>("GET", "/__introspection"),

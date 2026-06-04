@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/session";
-import { loadCreds, getClaim, setClaim } from "@/lib/creds";
+import { loadCreds, tryLoadCreds, getClaim, setClaim } from "@/lib/creds";
 import { arena } from "@/lib/arena";
 
 export async function GET() {
@@ -8,9 +8,14 @@ export async function GET() {
   const claim = await getClaim();
   if (claim) return NextResponse.json({ claimed: true, ...claim });
 
+  // No credentials at all → UI should offer registration.
+  const creds = await tryLoadCreds();
+  if (!creds) {
+    return NextResponse.json({ claimed: false, needsRegistration: true });
+  }
+
   // Surface the agent that *would* be claimed for confirmation in the UI.
   try {
-    const creds = await loadCreds();
     const me = await arena.me();
     return NextResponse.json({
       claimed: false,
