@@ -98,8 +98,42 @@ export default function Page() {
   // Tracks the current armed turn for timeout detection: (tableId, deadline).
   // Cleared when we successfully submit, or when the turn passes naturally.
   const armedTurnRef = useRef<{ tableId: string; deadline: number } | null>(null);
-  // The agentId we've already fetched a result for, to avoid spamming the API.
+  // Tracks which tableId we're currently looking for in /texas/recent-tables.
+  // When set, a retry loop is actively polling for that id; clearing it
+  // aborts the loop.
   const lastResultFetchedRef = useRef<string | null>(null);
+
+  // Kicks off a short-lived retry loop fetching /api/recent-tables until either
+  // (a) the target tableId appears, (b) a new live table arrives (signalled
+  // by the ref being overwritten), or (c) the budget runs out (~10s).
+  const fetchLastResultWithRetry = useCallback(async (targetTableId: string) => {
+    const start = Date.now();
+    let attempt = 0;
+    while (Date.now() - start < 10_000) {
+      // Aborted by a new live table (ref overwritten elsewhere).
+      if (lastResultFetchedRef.current !== targetTableId) return;
+      try {
+        const res = await clientFetch(`/api/recent-tables?limit=10`);
+        const j = await res.json();
+        const arr: RecentTable[] | undefined = (j as { data?: RecentTable[] })?.data;
+        const finished = arr?.find((rt) => rt.id === targetTableId);
+        if (finished) {
+          setLastResult(finished);
+          if (lastResultFetchedRef.current === targetTableId) {
+            lastResultFetchedRef.current = null;
+          }
+          return;
+        }
+      } catch {
+        // swallow — we'll just retry
+      }
+      attempt++;
+      const delay = Math.min(600 + attempt * 250, 1500);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    // Budget exhausted. Leave the ref so the next regular poll tick can still
+    // pick up the result if Arena finally indexes the table.
+  }, []);
 
   // Arm a timeout watcher whenever it's our turn. If the deadline passes
   // without a successful submitAction (which clears armedTurnRef), we treat it
@@ -296,28 +330,20 @@ export default function Page() {
         // real table arrives, so we don't need to clear it here.
 
         // If we just lost our table (had lastSeenTable before this tick), the
-        // session likely ended — fetch its completed-table summary so we can
-        // show the opponent showdown cards + winner. Use the prior tableId to
-        // ensure we only fetch once per session.
+        // session might be done OR we may be sidelined while opponents play
+        // it out. Arena often takes a few seconds to index a completed table
+        // — so kick off a short-lived retry burst (up to 10s) instead of a
+        // single fire-and-forget. The loop aborts the moment a new live
+        // table arrives (because the t-branch above overwrites the ref).
         if (lastSeenTable && lastResultFetchedRef.current === lastSeenTable.tableId) {
-          clientFetch(`/api/recent-tables?limit=5`)
-            .then((r) => r.json())
-            .then((j) => {
-              const arr: RecentTable[] | undefined = (j as { data?: RecentTable[] })?.data;
-              if (!arr || !arr.length) return;
-              const finished = arr.find((rt) => rt.id === lastSeenTable.tableId) ?? arr[0];
-              if (finished) setLastResult(finished);
-            })
-            .catch(() => {});
-          // Don't refetch the same session's result on every poll.
-          lastResultFetchedRef.current = null;
+          void fetchLastResultWithRetry(lastSeenTable.tableId);
         }
         await doAutoJoinIfNeeded(lob);
       }
     } catch (e) {
       setLastErr((e as Error).message);
     }
-  }, [doAutoJoinIfNeeded]);
+  }, [doAutoJoinIfNeeded, fetchLastResultWithRetry]);
 
   useEffect(() => {
     if (phase !== "ready") return;
@@ -335,6 +361,14 @@ export default function Page() {
     reasoning?: string;
   }) {
     if (!table) return;
+    // Disarm the timeout watcher BEFORE we await the network round-trip. If
+    // the user clicks an action close to the deadline and the POST takes a
+    // moment, the timer used to misfire and disable auto-rejoin even though
+    // the user *did* act in time. We restore the ref on failure so a real
+    // timeout (no retry) still trips the safety.
+    const wasArmed = armedTurnRef.current;
+    armedTurnRef.current = null;
+    setTimeoutNote(null);
     setSubmitting(true);
     setSubmitMsg(null);
     try {
@@ -346,16 +380,15 @@ export default function Page() {
       const j = await res.json();
       if (!res.ok) {
         setSubmitMsg(`✗ ${j.error || `HTTP ${res.status}`}`);
+        armedTurnRef.current = wasArmed; // restore — real timeout can still trip
       } else {
         setSubmitMsg(`✓ ${payload.action}${payload.amount ? ` ${payload.amount}` : ""}`);
-        // Successful submit clears the timeout watcher for this turn.
-        armedTurnRef.current = null;
-        setTimeoutNote(null);
         // immediate re-poll
         setTimeout(fetchTable, 250);
       }
     } catch (e) {
       setSubmitMsg(`✗ ${(e as Error).message}`);
+      armedTurnRef.current = wasArmed;
     } finally {
       setSubmitting(false);
     }
