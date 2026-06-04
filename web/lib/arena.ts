@@ -7,6 +7,7 @@ import type {
   AgentMeRaw,
   AgentStats,
   LobbyState,
+  RecentTable,
   Table,
 } from "./types";
 
@@ -194,7 +195,7 @@ export const arena = {
       query: { competitionId, agentId },
     }),
   recentTables: (competitionId: string, limit = 20) =>
-    call<unknown>("GET", "/texas/recent-tables", {
+    call<{ total: number; data: RecentTable[] }>("GET", "/texas/recent-tables", {
       query: { competitionId, limit: String(limit) },
     }),
 };

@@ -9,47 +9,41 @@ interface Props {
   table: Table;
   statsByAgent: Record<string, AgentStats | null>;
   summaryByAgent?: Record<string, string>;
+  // True when `table` is the live response from /texas/pending-actions, not a
+  // sticky cached copy. Arena only sends the table object when it's the hero's
+  // turn, so any "who's acting" info is only trustworthy when live.
+  isLive?: boolean;
 }
 
 // Mobile-first: board+pot strip on top, seats below in a 2-col responsive grid.
 // On md+ we drop seats into top/bottom rows and let the felt show through.
-export function PokerTable({ table, statsByAgent, summaryByAgent }: Props) {
+export function PokerTable({ table, statsByAgent, summaryByAgent, isLive }: Props) {
   const hero = table.selfSeatNumber;
   const seats = [...table.seats].sort((a, b) => (a.seatNumber ?? 0) - (b.seatNumber ?? 0));
   const half = Math.ceil(seats.length / 2);
   const top = seats.slice(0, half);
   const bottom = seats.slice(half);
-  const actingSeat = seats.find((s) => s.seatNumber === table.actingSeatNumber);
-  const heroIsActing = !!actingSeat && actingSeat.seatNumber === hero;
+  // We can only assert "X is acting" when this is a live payload. In a sticky
+  // view the actingSeatNumber is frozen from the last hero turn.
+  const heroIsActing =
+    !!isLive && table.actingSeatNumber != null && table.actingSeatNumber === hero;
 
   return (
     <div className="felt-bg rounded-3xl border-4 sm:border-8 border-zinc-800 shadow-2xl p-3 sm:p-5 md:p-8">
-      {/* Acting banner — always visible while a hand is in progress */}
-      {actingSeat && (
-        <div
-          className={`mb-3 mx-auto max-w-md rounded-xl px-3 py-2 border text-center text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 flex-wrap ${
-            heroIsActing
-              ? "bg-amber-400/30 border-amber-300/60 text-amber-100 shadow-glow"
-              : "bg-zinc-900/70 border-zinc-700/70 text-zinc-200"
-          }`}
-        >
+      {/* Acting banner — only on live data. Arena only sends the table when
+          it's our turn, so we only ever know "Your turn", never an opponent. */}
+      {heroIsActing && (
+        <div className="mb-3 mx-auto max-w-md rounded-xl px-3 py-2 border text-center text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 flex-wrap bg-amber-400/30 border-amber-300/60 text-amber-100 shadow-glow">
           <span className="text-yellow-300">▶</span>
-          {heroIsActing ? (
-            <span>Your turn</span>
-          ) : (
-            <>
-              <span>Acting:</span>
-              <span className="font-bold truncate max-w-[14rem]">
-                {actingSeat.agentName || actingSeat.agentHandle}
-              </span>
-              {actingSeat.agentHandle && (
-                <span className="text-[10px] text-zinc-400">@{actingSeat.agentHandle}</span>
-              )}
-            </>
-          )}
+          <span>Your turn</span>
           {table.actionDeadlineAt && (
             <ActionCountdown deadlineMs={table.actionDeadlineAt * 1000} />
           )}
+        </div>
+      )}
+      {!isLive && (
+        <div className="mb-3 mx-auto max-w-md rounded-xl px-3 py-1.5 border text-center text-[11px] sm:text-xs bg-zinc-900/70 border-zinc-700/70 text-zinc-400">
+          Opponent acting · Arena doesn't expose who until it's your turn again
         </div>
       )}
 
@@ -79,7 +73,7 @@ export function PokerTable({ table, statsByAgent, summaryByAgent }: Props) {
             key={s.seatId}
             seat={s}
             isHero={s.seatNumber === hero}
-            isActing={s.seatNumber === table.actingSeatNumber}
+            isActing={!!isLive && s.seatNumber === table.actingSeatNumber}
             bigBlind={table.bigBlindChips}
             stats={statsByAgent[s.agentId]}
             summary={summaryByAgent?.[s.agentId]}
@@ -96,7 +90,7 @@ export function PokerTable({ table, statsByAgent, summaryByAgent }: Props) {
             key={s.seatId}
             seat={s}
             isHero={s.seatNumber === hero}
-            isActing={s.seatNumber === table.actingSeatNumber}
+            isActing={!!isLive && s.seatNumber === table.actingSeatNumber}
             bigBlind={table.bigBlindChips}
             stats={statsByAgent[s.agentId]}
             summary={summaryByAgent?.[s.agentId]}

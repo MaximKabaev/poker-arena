@@ -5,6 +5,7 @@ import { PasswordGate } from "@/components/PasswordGate";
 import { RegisterForm } from "@/components/RegisterForm";
 import { AgentSwitcher, type AgentPublic } from "@/components/AgentSwitcher";
 import { ClaimSection } from "@/components/ClaimSection";
+import { LastTableResult } from "@/components/LastTableResult";
 import { PokerTable } from "@/components/PokerTable";
 import { ActionPanel } from "@/components/ActionPanel";
 import { EventFeed } from "@/components/EventFeed";
@@ -18,6 +19,7 @@ import {
 import type {
   ActionType,
   AgentStats,
+  RecentTable,
   Table,
 } from "@/lib/types";
 
@@ -75,10 +77,43 @@ export default function Page() {
   const [notifyOn, setNotifyOn] = useState(true);
   const [autoJoin, setAutoJoin] = useState(false);
   const [statsPanelOpen, setStatsPanelOpen] = useState(false);
+  const [lastResult, setLastResult] = useState<RecentTable | null>(null);
+  const [timeoutNote, setTimeoutNote] = useState<string | null>(null);
   const statsRequestedRef = useRef<Set<string>>(new Set());
   const prevTableIdRef = useRef<string | null>(null);
   const prevHeroActingRef = useRef<boolean>(false);
   const joinInFlightRef = useRef<boolean>(false);
+  // Tracks the current armed turn for timeout detection: (tableId, deadline).
+  // Cleared when we successfully submit, or when the turn passes naturally.
+  const armedTurnRef = useRef<{ tableId: string; deadline: number } | null>(null);
+  // The agentId we've already fetched a result for, to avoid spamming the API.
+  const lastResultFetchedRef = useRef<string | null>(null);
+
+  // Arm a timeout watcher whenever it's our turn. If the deadline passes
+  // without a successful submitAction (which clears armedTurnRef), we treat it
+  // as an auto-fold and stop auto-rejoin so we don't burn through games while
+  // the user is away.
+  useEffect(() => {
+    if (!table || !table.actionDeadlineAt) return;
+    const isHero =
+      table.actingSeatNumber != null && table.actingSeatNumber === table.selfSeatNumber;
+    if (!isHero) return;
+    const armed = { tableId: table.tableId, deadline: table.actionDeadlineAt };
+    armedTurnRef.current = armed;
+    const wait = armed.deadline * 1000 - Date.now() + 750;
+    const id = setTimeout(() => {
+      const cur = armedTurnRef.current;
+      if (!cur) return;
+      if (cur.tableId !== armed.tableId || cur.deadline !== armed.deadline) return;
+      // Still armed → submitAction was never called for this turn.
+      armedTurnRef.current = null;
+      if (autoJoin) setAutoJoin(false);
+      setTimeoutNote(
+        "⏱ Action timed out — auto-rejoin disabled. Click Auto-rejoin to resume.",
+      );
+    }, Math.max(wait, 1000));
+    return () => clearTimeout(id);
+  }, [table?.tableId, table?.actionDeadlineAt, table?.actingSeatNumber, table?.selfSeatNumber, autoJoin, table]);
 
   // Load notify preference and prime audio on the first user interaction.
   useEffect(() => {
@@ -196,6 +231,10 @@ export default function Page() {
 
       setTable(t);
       if (t) {
+        // Clear any prior session's completed-table result the moment we land
+        // at a new table. Same-id case keeps the existing result (rare).
+        setLastResult((cur) => (cur && cur.id !== t.tableId ? null : cur));
+        lastResultFetchedRef.current = t.tableId;
         setLastSeenTable(t);
         setLobby(null);
         // Lazily fetch opponent stats + LLM summary once per agent id.
@@ -237,6 +276,24 @@ export default function Page() {
         // matchmaking window is short (~10s) and the user wants to keep
         // reviewing the outcome. The sticky view is overwritten the moment a
         // real table arrives, so we don't need to clear it here.
+
+        // If we just lost our table (had lastSeenTable before this tick), the
+        // session likely ended — fetch its completed-table summary so we can
+        // show the opponent showdown cards + winner. Use the prior tableId to
+        // ensure we only fetch once per session.
+        if (lastSeenTable && lastResultFetchedRef.current === lastSeenTable.tableId) {
+          fetch(`/api/recent-tables?limit=5`)
+            .then((r) => r.json())
+            .then((j) => {
+              const arr: RecentTable[] | undefined = (j as { data?: RecentTable[] })?.data;
+              if (!arr || !arr.length) return;
+              const finished = arr.find((rt) => rt.id === lastSeenTable.tableId) ?? arr[0];
+              if (finished) setLastResult(finished);
+            })
+            .catch(() => {});
+          // Don't refetch the same session's result on every poll.
+          lastResultFetchedRef.current = null;
+        }
         await doAutoJoinIfNeeded(lob);
       }
     } catch (e) {
@@ -273,6 +330,9 @@ export default function Page() {
         setSubmitMsg(`✗ ${j.error || `HTTP ${res.status}`}`);
       } else {
         setSubmitMsg(`✓ ${payload.action}${payload.amount ? ` ${payload.amount}` : ""}`);
+        // Successful submit clears the timeout watcher for this turn.
+        armedTurnRef.current = null;
+        setTimeoutNote(null);
         // immediate re-poll
         setTimeout(fetchTable, 250);
       }
@@ -381,6 +441,29 @@ export default function Page() {
         </div>
       )}
 
+      {timeoutNote && (
+        <div className="mb-3 text-xs sm:text-sm bg-amber-950/60 border border-amber-700/60 text-amber-100 rounded px-3 py-2 flex items-center justify-between gap-2">
+          <span>{timeoutNote}</span>
+          <button
+            onClick={() => setTimeoutNote(null)}
+            className="text-amber-200 hover:text-amber-100 text-lg leading-none px-1"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {lastResult && (
+        <div className="mb-3">
+          <LastTableResult
+            table={lastResult}
+            selfAgentId={me?.agentId}
+            onDismiss={() => setLastResult(null)}
+          />
+        </div>
+      )}
+
       {!displayTable ? (
         <NoTable
           lobby={lobby}
@@ -402,6 +485,7 @@ export default function Page() {
               table={displayTable}
               statsByAgent={statsByAgent}
               summaryByAgent={summaryByAgent}
+              isLive={!!table}
             />
             <EventFeed events={displayTable.recentEvents} />
           </div>

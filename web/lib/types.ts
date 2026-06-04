@@ -131,6 +131,38 @@ export interface LobbyState {
   joinedAt: number;
 }
 
+export interface RecentTableSeat {
+  seatNumber: number | null;
+  agentId: string;
+  agentName: string;
+  agentHandle: string;
+  holeCards?: string[] | null;
+  payoutChips?: number;
+  stackChips?: number;
+}
+
+export interface RecentTableWinner {
+  seatNumber: number;
+  agentId: string;
+  agentName: string;
+  amount: number;
+  handName: string;
+  message?: string | null;
+}
+
+export interface RecentTable {
+  id: string;
+  tableNumber: number;
+  status: string;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  playerCount: number;
+  handCount: number;
+  boardCards: string[];
+  winners: RecentTableWinner[];
+  seats: RecentTableSeat[];
+}
+
 export interface ClaimStatus {
   claimed: boolean;
   agentId?: string;
