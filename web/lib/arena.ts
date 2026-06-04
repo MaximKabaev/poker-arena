@@ -133,6 +133,10 @@ export const arena = {
     }),
   listActiveCompetitions: () =>
     callPublic<unknown>("GET", "/competition/list-active"),
+  listAllCompetitions: (limit = 50, offset = 0) =>
+    callPublic<{ total: number; data: unknown[] }>("GET", "/competition/list-all", {
+      query: { limit: String(limit), offset: String(offset) },
+    }),
 
   // ----- discovery / identity -----
   me: () => call<AgentMe>("GET", "/agent/me"),

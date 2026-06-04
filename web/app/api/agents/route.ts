@@ -30,9 +30,14 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
-  if (!body.handle?.trim() || !body.name?.trim() || !body.competitionId?.trim()) {
+  if (
+    !body.handle?.trim() ||
+    !body.name?.trim() ||
+    !body.competitionId?.trim() ||
+    !body.quote?.trim()
+  ) {
     return NextResponse.json(
-      { error: "handle, name, and competitionId are required" },
+      { error: "handle, name, quote, and competitionId are required" },
       { status: 400 },
     );
   }

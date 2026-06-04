@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 
 interface Competition {
-  competitionId?: string;
-  id?: string;
-  name?: string;
-  title?: string;
-  [k: string]: unknown;
+  id: string;
+  name: string;
+  description?: string | null;
+  seasonNumber?: number;
+  gameType?: string;
+  status?: string | null;
+  active: boolean;
 }
 
 interface Props {
@@ -16,6 +18,8 @@ interface Props {
 
 export function RegisterForm({ onRegistered }: Props) {
   const [comps, setComps] = useState<Competition[]>([]);
+  const [compsLoading, setCompsLoading] = useState(true);
+  const [compsError, setCompsError] = useState<string | null>(null);
   const [handle, setHandle] = useState("");
   const [name, setName] = useState("");
   const [quote, setQuote] = useState("");
@@ -26,19 +30,20 @@ export function RegisterForm({ onRegistered }: Props) {
 
   useEffect(() => {
     (async () => {
+      setCompsLoading(true);
       try {
         const res = await fetch("/api/competitions");
         const j = await res.json();
-        const arr: Competition[] = Array.isArray(j)
-          ? j
-          : Array.isArray((j as { competitions?: unknown }).competitions)
-          ? ((j as { competitions: Competition[] }).competitions)
-          : [];
+        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+        const arr: Competition[] = Array.isArray(j.competitions) ? j.competitions : [];
         setComps(arr);
-        const first = arr[0]?.competitionId || arr[0]?.id;
-        if (first) setCompetitionId(first);
+        // default-select first active competition
+        const firstActive = arr.find((c) => c.active) ?? arr[0];
+        if (firstActive) setCompetitionId(firstActive.id);
       } catch (e) {
-        setErr((e as Error).message);
+        setCompsError((e as Error).message);
+      } finally {
+        setCompsLoading(false);
       }
     })();
   }, []);
@@ -60,7 +65,14 @@ export function RegisterForm({ onRegistered }: Props) {
         }),
       });
       const j = await res.json();
-      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      if (!res.ok) {
+        // Surface Arena's actual validation/error message when available.
+        const payloadMsg =
+          j.payload && typeof j.payload === "object" && j.payload && "message" in j.payload
+            ? String((j.payload as { message?: unknown }).message)
+            : null;
+        throw new Error(payloadMsg || j.error || `HTTP ${res.status}`);
+      }
       onRegistered();
     } catch (e) {
       setErr((e as Error).message);
@@ -70,15 +82,15 @@ export function RegisterForm({ onRegistered }: Props) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
+    <div className="min-h-screen flex items-center justify-center px-4 py-6">
       <form
         onSubmit={submit}
-        className="w-full max-w-lg bg-zinc-900/80 backdrop-blur rounded-xl border border-zinc-800 p-6 shadow-xl space-y-4"
+        className="w-full max-w-lg bg-zinc-900/80 backdrop-blur rounded-xl border border-zinc-800 p-5 sm:p-6 shadow-xl space-y-4"
       >
         <div>
-          <h1 className="text-2xl font-bold mb-1">Register a new agent</h1>
-          <p className="text-sm text-zinc-400">
-            No credentials found. Create a fresh agent — the API key is saved to{" "}
+          <h1 className="text-xl sm:text-2xl font-bold mb-1">Register a new agent</h1>
+          <p className="text-xs sm:text-sm text-zinc-400">
+            Creates a fresh agent on dev.fun. The API key is saved to{" "}
             <code>web/.creds.json</code> and never leaves this server.
           </p>
         </div>
@@ -88,6 +100,7 @@ export function RegisterForm({ onRegistered }: Props) {
             required
             value={handle}
             onChange={(e) => setHandle(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))}
+            maxLength={50}
             className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm font-mono outline-none focus:border-blue-500"
           />
         </Field>
@@ -97,21 +110,23 @@ export function RegisterForm({ onRegistered }: Props) {
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            maxLength={64}
+            maxLength={100}
             className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm outline-none focus:border-blue-500"
           />
         </Field>
 
-        <Field label="Quote (optional)">
+        <Field label="Quote" hint="required, ≤280 chars">
           <input
+            required
             value={quote}
             onChange={(e) => setQuote(e.target.value)}
-            maxLength={200}
+            maxLength={280}
+            placeholder="e.g. fold less, bluff more"
             className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm outline-none focus:border-blue-500"
           />
         </Field>
 
-        <Field label="Description (optional)">
+        <Field label="Description (optional)" hint="≤500 chars">
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -121,7 +136,13 @@ export function RegisterForm({ onRegistered }: Props) {
           />
         </Field>
 
-        <Field label="Competition">
+        <Field
+          label="Competition"
+          hint={compsLoading ? "loading…" : `${comps.length} Texas Hold'em`}
+        >
+          {compsError && (
+            <p className="text-xs text-red-400 mb-1">Failed to load competitions: {compsError}</p>
+          )}
           {comps.length > 0 ? (
             <select
               required
@@ -129,33 +150,39 @@ export function RegisterForm({ onRegistered }: Props) {
               onChange={(e) => setCompetitionId(e.target.value)}
               className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm outline-none focus:border-blue-500"
             >
-              {comps.map((c) => {
-                const id = c.competitionId || c.id || "";
-                const label = c.name || c.title || id;
-                return (
-                  <option key={id} value={id}>
-                    {label} — {id}
-                  </option>
-                );
-              })}
+              {comps.map((c) => (
+                <option key={c.id} value={c.id} disabled={!c.active}>
+                  {c.name}
+                  {c.seasonNumber != null && ` · S${c.seasonNumber}`}
+                  {c.status && ` · ${c.status}`}
+                  {!c.active && " (ended)"}
+                </option>
+              ))}
             </select>
           ) : (
             <input
               required
               value={competitionId}
               onChange={(e) => setCompetitionId(e.target.value)}
-              placeholder="competition id (e.g. cmpy2qy65002ud9ej6b7jjq0l)"
+              placeholder="competition id"
               className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm font-mono outline-none focus:border-blue-500"
             />
           )}
+          {competitionId && (
+            <div className="mt-1 text-[10px] text-zinc-500 font-mono break-all">{competitionId}</div>
+          )}
         </Field>
 
-        {err && <p className="text-sm text-red-400">{err}</p>}
+        {err && (
+          <div className="text-sm bg-red-950/60 border border-red-900 text-red-200 rounded px-3 py-2 break-words">
+            {err}
+          </div>
+        )}
 
         <button
           type="submit"
-          disabled={busy || !handle || !name || !competitionId}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-md py-2 font-semibold transition"
+          disabled={busy || !handle || !name || !quote || !competitionId}
+          className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-md py-2.5 font-semibold transition"
         >
           {busy ? "Registering…" : "Register agent"}
         </button>
