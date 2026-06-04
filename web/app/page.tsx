@@ -78,7 +78,6 @@ export default function Page() {
   const statsRequestedRef = useRef<Set<string>>(new Set());
   const prevTableIdRef = useRef<string | null>(null);
   const prevHeroActingRef = useRef<boolean>(false);
-  const lastAutoJoinAtRef = useRef<number>(0);
   const joinInFlightRef = useRef<boolean>(false);
 
   // Load notify preference and prime audio on the first user interaction.
@@ -150,12 +149,15 @@ export default function Page() {
     if (!autoJoin) return;
     if (joinInFlightRef.current) return;
     if (lob?.inLobby) return; // already queued, just wait
-    const now = Date.now();
-    if (now - lastAutoJoinAtRef.current < 8000) return;
-    lastAutoJoinAtRef.current = now;
     joinInFlightRef.current = true;
     try {
       const res = await fetch("/api/join", { method: "POST" });
+      // 409 = already in lobby (upstream Arena). That's exactly the state we
+      // want, so swallow it silently instead of surfacing as an error.
+      if (res.status === 409) {
+        setSubmitMsg("auto-join: already queued");
+        return;
+      }
       const j = await res.json();
       if (!res.ok) {
         setSubmitMsg(`auto-join: ${j.error || `HTTP ${res.status}`}`);
@@ -231,15 +233,10 @@ export default function Page() {
           .then((r) => r.json())
           .catch(() => null);
         setLobby(lob);
-        // If we're back in the lobby, the previous table session has ended.
-        // Clear the sticky view so the next game starts cleanly.
-        if (lob?.inLobby) {
-          setLastSeenTable(null);
-          statsRequestedRef.current.clear();
-          summariesRequestedRef.current.clear();
-          setStatsByAgent({});
-          setSummaryByAgent({});
-        }
+        // Keep the last table visible while we wait for the next one — the
+        // matchmaking window is short (~10s) and the user wants to keep
+        // reviewing the outcome. The sticky view is overwritten the moment a
+        // real table arrives, so we don't need to clear it here.
         await doAutoJoinIfNeeded(lob);
       }
     } catch (e) {
@@ -303,16 +300,26 @@ export default function Page() {
   }
 
   // Clicking the "Join" button enables continuous auto-join (game after game).
-  // Clicking again ("Stop joining") disables it. The first click also fires a
-  // manual join immediately so the user doesn't have to wait one poll tick.
+  // Clicking again ("Stop joining") disables it. The first click fires a manual
+  // join immediately ONLY if we aren't already at a table or queued in the
+  // lobby — in those cases the loop just arms and waits.
   function toggleAutoJoin() {
     const next = !autoJoin;
     setAutoJoin(next);
     if (next) {
-      lastAutoJoinAtRef.current = 0; // allow immediate join
-      joinLobbyOnce();
+      const atTable = !!table;
+      const inLobby = !!lobby?.inLobby;
+      if (!atTable && !inLobby) {
+        joinLobbyOnce();
+      } else {
+        setSubmitMsg(
+          atTable
+            ? "auto-rejoin armed — will queue you after this game"
+            : "auto-rejoin armed — already in lobby",
+        );
+      }
     } else {
-      setSubmitMsg("auto-join stopped");
+      setSubmitMsg("auto-rejoin stopped");
     }
   }
 
@@ -338,6 +345,10 @@ export default function Page() {
   // a "waiting" view so the user keeps context between turns/hands.
   const displayTable = table ?? lastSeenTable;
   const isStaleView = !table && !!lastSeenTable;
+  // We can be "seated but the UI has no table to show" on the very first hand
+  // before our first action ever fires. Detect it so we don't display the
+  // misleading "No active table" screen while we're still seated.
+  const seatedButBlind = !displayTable && lobby !== null && !lobby.inLobby;
   const selfSeat = displayTable?.seats.find(
     (s) => s.seatNumber === displayTable.selfSeatNumber,
   );
@@ -364,6 +375,8 @@ export default function Page() {
           }
         }}
         onOpenStats={() => setStatsPanelOpen(true)}
+        autoJoin={autoJoin}
+        onToggleAutoJoin={toggleAutoJoin}
       />
 
       {lastErr && (
@@ -373,13 +386,17 @@ export default function Page() {
       )}
 
       {!displayTable ? (
-        <NoTable
-          lobby={lobby}
-          autoJoin={autoJoin}
-          onToggleAutoJoin={toggleAutoJoin}
-          busy={submitting}
-          note={submitMsg}
-        />
+        seatedButBlind ? (
+          <SeatedWaiting autoJoin={autoJoin} onToggleAutoJoin={toggleAutoJoin} />
+        ) : (
+          <NoTable
+            lobby={lobby}
+            autoJoin={autoJoin}
+            onToggleAutoJoin={toggleAutoJoin}
+            busy={submitting}
+            note={submitMsg}
+          />
+        )
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3 sm:gap-4">
           <div className="space-y-3 sm:space-y-4 min-w-0">
@@ -465,6 +482,8 @@ function Header({
   notifyOn,
   onToggleNotify,
   onOpenStats,
+  autoJoin,
+  onToggleAutoJoin,
 }: {
   me: AgentMe | null;
   agentsInfo: AgentsResponse | null;
@@ -477,6 +496,8 @@ function Header({
   notifyOn: boolean;
   onToggleNotify: () => void;
   onOpenStats: () => void;
+  autoJoin: boolean;
+  onToggleAutoJoin: () => void;
 }) {
   const activeFromStore = agentsInfo?.agents.find((a) => a.isActive);
   const name = me?.name ?? activeFromStore?.agentName ?? "—";
@@ -524,6 +545,22 @@ function Header({
           className="text-[11px] sm:text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
         >
           📊 Me
+        </button>
+        <button
+          onClick={onToggleAutoJoin}
+          aria-pressed={autoJoin}
+          title={
+            autoJoin
+              ? "Auto-rejoin is ON — click to stop after this game"
+              : "Auto-rejoin is OFF — click to keep queueing game after game"
+          }
+          className={`text-[11px] sm:text-xs px-2 py-1 rounded border font-semibold ${
+            autoJoin
+              ? "bg-red-700/40 hover:bg-red-700/60 border-red-600/60 text-red-100"
+              : "bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-300"
+          }`}
+        >
+          {autoJoin ? "● Auto-rejoin: stop" : "○ Auto-rejoin"}
         </button>
         <button
           onClick={onToggleNotify}
@@ -587,6 +624,39 @@ function MobileActionDrawer({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function SeatedWaiting({
+  autoJoin,
+  onToggleAutoJoin,
+}: {
+  autoJoin: boolean;
+  onToggleAutoJoin: () => void;
+}) {
+  return (
+    <div className="mt-10 max-w-md mx-auto bg-zinc-900/80 border border-zinc-800 rounded-xl p-6 text-center">
+      <h2 className="text-lg font-bold mb-2">Seated — waiting for your turn</h2>
+      <p className="text-sm text-zinc-400 mb-2">
+        You're at a table. The first time it's your turn, the felt and your hole cards
+        will appear here, and you'll get a sound + vibration.
+      </p>
+      <p className="text-[11px] text-zinc-500 mb-4">
+        (Dev.fun's API only sends the table state on your turn — there's no way to render
+        it before you've acted at least once this session.)
+      </p>
+      <button
+        onClick={onToggleAutoJoin}
+        aria-pressed={autoJoin}
+        className={`rounded-md py-1.5 px-3 font-semibold text-xs ${
+          autoJoin
+            ? "bg-red-700/40 border border-red-600/60 text-red-100"
+            : "bg-zinc-800 border border-zinc-700 text-zinc-300"
+        }`}
+      >
+        {autoJoin ? "● Auto-rejoin: stop" : "○ Auto-rejoin"}
+      </button>
     </div>
   );
 }

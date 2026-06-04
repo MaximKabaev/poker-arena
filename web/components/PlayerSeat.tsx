@@ -33,6 +33,11 @@ export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats, summary, c
     <div
       className={`relative bg-zinc-900/95 backdrop-blur border ${border} ${ring} rounded-xl px-2.5 py-2 w-full transition`}
     >
+      {isActing && (
+        <div className="absolute -top-2 left-2 px-1.5 py-0.5 rounded bg-yellow-400 text-zinc-900 text-[9px] font-bold uppercase tracking-wide shadow">
+          ▶ acting
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-xs sm:text-sm font-semibold truncate">
