@@ -20,6 +20,8 @@ export function RegisterForm({ onRegistered }: Props) {
   const [comps, setComps] = useState<Competition[]>([]);
   const [compsLoading, setCompsLoading] = useState(true);
   const [compsError, setCompsError] = useState<string | null>(null);
+  const [manualMode, setManualMode] = useState(false);
+  const [defaultCompetitionId, setDefaultCompetitionId] = useState<string | null>(null);
   const [handle, setHandle] = useState("");
   const [name, setName] = useState("");
   const [quote, setQuote] = useState("");
@@ -34,12 +36,18 @@ export function RegisterForm({ onRegistered }: Props) {
       try {
         const res = await fetch("/api/competitions");
         const j = await res.json();
-        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
         const arr: Competition[] = Array.isArray(j.competitions) ? j.competitions : [];
+        const fallbackId: string | null = j.defaultCompetitionId ?? null;
         setComps(arr);
-        // default-select first active competition
+        setDefaultCompetitionId(fallbackId);
+        if (j.error) setCompsError(j.error);
+        // Pick a default: first active, else fallback, else first in list
         const firstActive = arr.find((c) => c.active) ?? arr[0];
         if (firstActive) setCompetitionId(firstActive.id);
+        else if (fallbackId) {
+          setCompetitionId(fallbackId);
+          setManualMode(true);
+        }
       } catch (e) {
         setCompsError((e as Error).message);
       } finally {
@@ -141,9 +149,12 @@ export function RegisterForm({ onRegistered }: Props) {
           hint={compsLoading ? "loading…" : `${comps.length} Texas Hold'em`}
         >
           {compsError && (
-            <p className="text-xs text-red-400 mb-1">Failed to load competitions: {compsError}</p>
+            <p className="text-xs text-amber-300 mb-1">
+              Competition discovery unavailable — using manual entry.
+              <span className="block text-[10px] text-zinc-500 mt-0.5 break-words">{compsError}</span>
+            </p>
           )}
-          {comps.length > 0 ? (
+          {!manualMode && comps.length > 0 ? (
             <select
               required
               value={competitionId}
@@ -164,10 +175,33 @@ export function RegisterForm({ onRegistered }: Props) {
               required
               value={competitionId}
               onChange={(e) => setCompetitionId(e.target.value)}
-              placeholder="competition id"
+              placeholder={defaultCompetitionId ?? "competition id (e.g. cmpy2qy65002ud9ej6b7jjq0l)"}
               className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm font-mono outline-none focus:border-blue-500"
             />
           )}
+          <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500">
+            {comps.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setManualMode((v) => !v)}
+                className="underline hover:text-zinc-300"
+              >
+                {manualMode ? "use dropdown" : "enter manually"}
+              </button>
+            )}
+            {defaultCompetitionId && competitionId !== defaultCompetitionId && (
+              <button
+                type="button"
+                onClick={() => {
+                  setManualMode(true);
+                  setCompetitionId(defaultCompetitionId);
+                }}
+                className="underline hover:text-zinc-300"
+              >
+                use default ({defaultCompetitionId.slice(0, 12)}…)
+              </button>
+            )}
+          </div>
           {competitionId && (
             <div className="mt-1 text-[10px] text-zinc-500 font-mono break-all">{competitionId}</div>
           )}

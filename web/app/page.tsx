@@ -448,12 +448,15 @@ function NoTable({
   busy: boolean;
   note: string | null;
 }) {
-  const l = lobby as { position?: number; kind?: string } | null;
+  const l = lobby as { inLobby?: boolean; position?: number; total?: number } | null;
   return (
     <div className="mt-10 max-w-md mx-auto bg-zinc-900/80 border border-zinc-800 rounded-xl p-6 text-center">
       <h2 className="text-lg font-bold mb-2">No active table</h2>
-      {l?.position != null && (
-        <p className="text-sm text-zinc-400 mb-2">Lobby position: #{l.position}</p>
+      {l?.inLobby && l.position != null && (
+        <p className="text-sm text-zinc-400 mb-2">
+          Lobby position: #{l.position}
+          {l.total != null && ` of ${l.total}`}
+        </p>
       )}
       <p className="text-sm text-zinc-400 mb-4">
         Join the matchmaking queue to be seated. You'll need ≥1 BB in bankroll.

@@ -90,9 +90,8 @@ export interface PlayingStyle {
 
 export interface AgentStats {
   agentId: string;
-  agentName?: string;
-  agentHandle?: string;
-  handsObserved?: number;
+  competitionId?: string;
+  sampleSize?: number;
   vpip?: number | null;
   pfr?: number | null;
   threeBetPct?: number | null;
@@ -104,13 +103,32 @@ export interface AgentStats {
   [k: string]: unknown;
 }
 
+// Raw shape returned by GET /agent/me — uses `id`, not `agentId`.
+export interface AgentMeRaw {
+  id: string;
+  handle: string;
+  name: string;
+  quote?: string | null;
+  status?: string;
+  leaderboard?: unknown[];
+  [k: string]: unknown;
+}
+
+// Shape the UI receives from /api/agent — normalized to `agentId`.
 export interface AgentMe {
   agentId: string;
   handle?: string;
   name?: string;
-  quote?: string;
-  description?: string;
+  quote?: string | null;
+  status?: string;
   [k: string]: unknown;
+}
+
+// /texas/lobby returns { lobby: {position, total, joinedAt} | null }
+export interface LobbyState {
+  position: number;
+  total: number;
+  joinedAt: number;
 }
 
 export interface ClaimStatus {

@@ -4,8 +4,9 @@
 import { getBaseUrl, loadCreds } from "./creds";
 import type {
   ActionRequest,
-  AgentMe,
+  AgentMeRaw,
   AgentStats,
+  LobbyState,
   Table,
 } from "./types";
 
@@ -139,7 +140,7 @@ export const arena = {
     }),
 
   // ----- discovery / identity -----
-  me: () => call<AgentMe>("GET", "/agent/me"),
+  me: () => call<AgentMeRaw>("GET", "/agent/me"),
   introspection: () => call<unknown>("GET", "/__introspection"),
   competition: async (competitionId: string) =>
     call<unknown>("GET", "/competition", { query: { competitionId } }),
@@ -154,7 +155,7 @@ export const arena = {
       body: txHash ? { competitionId, txHash } : { competitionId },
     }),
   lobby: (competitionId: string) =>
-    call<unknown>("GET", "/texas/lobby", { query: { competitionId } }),
+    call<{ lobby: LobbyState | null }>("GET", "/texas/lobby", { query: { competitionId } }),
   pendingActions: (competitionId: string) =>
     call<{ tables: Table[] }>("GET", "/texas/pending-actions", {
       query: { competitionId },

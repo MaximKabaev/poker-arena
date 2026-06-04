@@ -139,8 +139,8 @@ function StatsFull({ stats }: { stats: AgentStats }) {
       <Pair k="Bluff%" v={fmt(stats.bluffPct)} />
       <Pair k="WTSD" v={fmt(stats.wtsd)} />
       <Pair k="WSD" v={fmt(stats.wsd)} />
-      {stats.handsObserved != null && (
-        <Pair k="hands" v={<span className="font-mono">{stats.handsObserved}</span>} />
+      {stats.sampleSize != null && (
+        <Pair k="hands" v={<span className="font-mono">{stats.sampleSize}</span>} />
       )}
     </>
   );
