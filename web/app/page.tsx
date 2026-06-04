@@ -109,6 +109,9 @@ export default function Page() {
   // When set, a retry loop is actively polling for that id; clearing it
   // aborts the loop.
   const lastResultFetchedRef = useRef<string | null>(null);
+  // Prevents multiple concurrent retry loops fighting over the same tableId
+  // (each poll tick used to spawn its own).
+  const lastResultInFlightRef = useRef<boolean>(false);
 
   // Kicks off a short-lived retry loop fetching /api/recent-tables until either
   // (a) the target tableId appears, (b) a new live table arrives (signalled
@@ -259,7 +262,7 @@ export default function Page() {
     if (lob?.inLobby) return; // already queued, just wait
     joinInFlightRef.current = true;
     try {
-      const res = await fetch("/api/join", { method: "POST" });
+      const res = await clientFetch("/api/join", { method: "POST" });
       // 409 from /texas/join means Arena considers us "already participating"
       // for this competition — either queued in the lobby OR seated at a
       // table. /texas/lobby will tell us which one if it's the former.
@@ -356,14 +359,21 @@ export default function Page() {
         // reviewing the outcome. The sticky view is overwritten the moment a
         // real table arrives, so we don't need to clear it here.
 
-        // If we just lost our table (had lastSeenTable before this tick), the
-        // session might be done OR we may be sidelined while opponents play
-        // it out. Arena often takes a few seconds to index a completed table
-        // — so kick off a short-lived retry burst (up to 10s) instead of a
-        // single fire-and-forget. The loop aborts the moment a new live
-        // table arrives (because the t-branch above overwrites the ref).
-        if (lastSeenTable && lastResultFetchedRef.current === lastSeenTable.tableId) {
-          void fetchLastResultWithRetry(lastSeenTable.tableId);
+        // Session may have ended (or we're sidelined). Run a 10s retry burst
+        // against /texas/recent-tables — Arena often takes a few seconds to
+        // index the completed table.
+        //
+        // We drive this off lastResultFetchedRef (set in the t-branch the
+        // previous tick) rather than lastSeenTable, because lastSeenTable is
+        // captured in this useCallback's stale closure and silently goes
+        // empty after the first table. The retry guards against overlap with
+        // lastResultInFlightRef.
+        const targetTableId = lastResultFetchedRef.current;
+        if (targetTableId && !lastResultInFlightRef.current) {
+          lastResultInFlightRef.current = true;
+          fetchLastResultWithRetry(targetTableId).finally(() => {
+            lastResultInFlightRef.current = false;
+          });
         }
         await doAutoJoinIfNeeded(lob);
       }

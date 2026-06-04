@@ -108,10 +108,17 @@ async function call<T>(
   }
 
   if (!res.ok) {
+    // Arena returns errors as either {message: ...} or {error: ...} depending
+    // on the endpoint. Check both so we don't fall back to res.statusText
+    // ("Forbidden", "Bad Request", …) when the server actually told us why.
+    const obj = (typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null);
     const msg =
-      (typeof parsed === "object" && parsed && "message" in parsed
-        ? String((parsed as { message?: unknown }).message)
-        : null) || res.statusText || "request failed";
+      (obj && typeof obj.message === "string" ? obj.message : null) ||
+      (obj && typeof obj.error === "string" ? obj.error : null) ||
+      res.statusText ||
+      "request failed";
     throw new ArenaError(res.status, msg, parsed);
   }
   return parsed as T;
@@ -149,10 +156,17 @@ async function callPublic<T>(
     }
   }
   if (!res.ok) {
+    // Arena returns errors as either {message: ...} or {error: ...} depending
+    // on the endpoint. Check both so we don't fall back to res.statusText
+    // ("Forbidden", "Bad Request", …) when the server actually told us why.
+    const obj = (typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null);
     const msg =
-      (typeof parsed === "object" && parsed && "message" in parsed
-        ? String((parsed as { message?: unknown }).message)
-        : null) || res.statusText || "request failed";
+      (obj && typeof obj.message === "string" ? obj.message : null) ||
+      (obj && typeof obj.error === "string" ? obj.error : null) ||
+      res.statusText ||
+      "request failed";
     throw new ArenaError(res.status, msg, parsed);
   }
   return parsed as T;
