@@ -10,6 +10,7 @@ interface Props {
   isActing: boolean;
   bigBlind: number;
   stats?: AgentStats | null;
+  summary?: string;
   compact?: boolean;
 }
 
@@ -21,7 +22,7 @@ const STATUS_COLOR: Record<string, string> = {
   Settled: "border-zinc-600",
 };
 
-export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats, compact }: Props) {
+export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats, summary, compact }: Props) {
   const [open, setOpen] = useState(false);
   const ring = isActing ? "ring-2 ring-yellow-400 shadow-glow" : "";
   const border = STATUS_COLOR[seat.status] || "border-zinc-700";
@@ -95,6 +96,12 @@ export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats, compact }:
 
       {open && (
         <div className="mt-2 pt-2 border-t border-zinc-800 text-[11px] sm:text-xs space-y-1">
+          {summary && !isHero && (
+            <div className="text-emerald-200/90 italic leading-snug pb-1">
+              <span className="text-[9px] uppercase tracking-wide text-emerald-400/80 mr-1 not-italic">AI</span>
+              {summary}
+            </div>
+          )}
           {stats ? <StatsFull stats={stats} /> : <span className="text-zinc-500">No stats yet</span>}
         </div>
       )}

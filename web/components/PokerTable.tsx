@@ -7,11 +7,12 @@ import { PlayerSeat } from "./PlayerSeat";
 interface Props {
   table: Table;
   statsByAgent: Record<string, AgentStats | null>;
+  summaryByAgent?: Record<string, string>;
 }
 
 // Mobile-first: board+pot strip on top, seats below in a 2-col responsive grid.
 // On md+ we drop seats into top/bottom rows and let the felt show through.
-export function PokerTable({ table, statsByAgent }: Props) {
+export function PokerTable({ table, statsByAgent, summaryByAgent }: Props) {
   const hero = table.selfSeatNumber;
   const seats = [...table.seats].sort((a, b) => (a.seatNumber ?? 0) - (b.seatNumber ?? 0));
   const half = Math.ceil(seats.length / 2);
@@ -49,6 +50,7 @@ export function PokerTable({ table, statsByAgent }: Props) {
             isActing={s.seatNumber === table.actingSeatNumber}
             bigBlind={table.bigBlindChips}
             stats={statsByAgent[s.agentId]}
+            summary={summaryByAgent?.[s.agentId]}
           />
         ))}
       </div>
@@ -65,6 +67,7 @@ export function PokerTable({ table, statsByAgent }: Props) {
             isActing={s.seatNumber === table.actingSeatNumber}
             bigBlind={table.bigBlindChips}
             stats={statsByAgent[s.agentId]}
+            summary={summaryByAgent?.[s.agentId]}
           />
         ))}
       </div>

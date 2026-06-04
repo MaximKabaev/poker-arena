@@ -11,6 +11,7 @@ import {
   isNotifyEnabled,
   setNotifyEnabled,
   notifyTableFound,
+  notifyYourTurn,
   primeNotify,
 } from "@/lib/notify";
 import type {
@@ -19,6 +20,24 @@ import type {
   Table,
 } from "@/lib/types";
 
+interface LobbyView {
+  inLobby?: boolean;
+  position?: number;
+  total?: number;
+  error?: string;
+}
+
+interface LeaderboardEntry {
+  arenaId?: string;
+  arenaName?: string;
+  arenaStatus?: string;
+  rank?: number;
+  bestRank?: number;
+  totalScore?: number;
+  totalSubmissions?: number;
+  streak?: number;
+}
+
 type Phase = "loading" | "auth" | "register" | "ready";
 
 interface AgentMe {
@@ -26,6 +45,8 @@ interface AgentMe {
   handle?: string;
   name?: string;
   quote?: string;
+  status?: string;
+  leaderboard?: LeaderboardEntry[];
 }
 
 interface AgentsResponse {
@@ -39,15 +60,25 @@ export default function Page() {
   const [me, setMe] = useState<AgentMe | null>(null);
   const [agentsInfo, setAgentsInfo] = useState<AgentsResponse | null>(null);
   const [table, setTable] = useState<Table | null>(null);
-  const [lobby, setLobby] = useState<unknown>(null);
+  // Sticky copy of the last non-null table — keeps the UI visible between
+  // turns and between hands within the same table session.
+  const [lastSeenTable, setLastSeenTable] = useState<Table | null>(null);
+  const [lobby, setLobby] = useState<LobbyView | null>(null);
   const [statsByAgent, setStatsByAgent] = useState<Record<string, AgentStats | null>>({});
+  const [summaryByAgent, setSummaryByAgent] = useState<Record<string, string>>({});
+  const summariesRequestedRef = useRef<Set<string>>(new Set());
   const [pollMs, setPollMs] = useState(3000);
   const [lastErr, setLastErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitMsg, setSubmitMsg] = useState<string | null>(null);
   const [notifyOn, setNotifyOn] = useState(true);
+  const [autoJoin, setAutoJoin] = useState(false);
+  const [statsPanelOpen, setStatsPanelOpen] = useState(false);
   const statsRequestedRef = useRef<Set<string>>(new Set());
   const prevTableIdRef = useRef<string | null>(null);
+  const prevHeroActingRef = useRef<boolean>(false);
+  const lastAutoJoinAtRef = useRef<number>(0);
+  const joinInFlightRef = useRef<boolean>(false);
 
   // Load notify preference and prime audio on the first user interaction.
   useEffect(() => {
@@ -114,6 +145,29 @@ export default function Page() {
     } catch {}
   }, []);
 
+  const doAutoJoinIfNeeded = useCallback(async (lob: LobbyView | null) => {
+    if (!autoJoin) return;
+    if (joinInFlightRef.current) return;
+    if (lob?.inLobby) return; // already queued, just wait
+    const now = Date.now();
+    if (now - lastAutoJoinAtRef.current < 8000) return;
+    lastAutoJoinAtRef.current = now;
+    joinInFlightRef.current = true;
+    try {
+      const res = await fetch("/api/join", { method: "POST" });
+      const j = await res.json();
+      if (!res.ok) {
+        setSubmitMsg(`auto-join: ${j.error || `HTTP ${res.status}`}`);
+      } else {
+        setSubmitMsg(`auto-join: ${j.kind ?? "queued"}`);
+      }
+    } catch (e) {
+      setSubmitMsg(`auto-join: ${(e as Error).message}`);
+    } finally {
+      joinInFlightRef.current = false;
+    }
+  }, [autoJoin]);
+
   const fetchTable = useCallback(async () => {
     try {
       const r = await fetch("/api/table");
@@ -124,37 +178,73 @@ export default function Page() {
       }
       setLastErr(null);
       const t: Table | null = j.tables?.[0] ?? null;
-      // Sound + vibrate on the transition from "no table" → "table found",
-      // or whenever we land on a different table than before.
+
+      // Sound + vibrate on table-found and on hero-turn-start transitions.
       const newId = t?.tableId ?? null;
+      const heroActing =
+        !!t && t.actingSeatNumber != null && t.actingSeatNumber === t.selfSeatNumber;
       if (newId && newId !== prevTableIdRef.current) {
         notifyTableFound();
+      } else if (heroActing && !prevHeroActingRef.current) {
+        notifyYourTurn();
       }
       prevTableIdRef.current = newId;
+      prevHeroActingRef.current = heroActing;
+
       setTable(t);
-      if (!t) {
-        // no active table — fetch lobby for context
-        const lob = await fetch("/api/lobby").then((r) => r.json()).catch(() => null);
-        setLobby(lob);
-      } else {
+      if (t) {
+        setLastSeenTable(t);
         setLobby(null);
-        // lazily fetch opponent stats once per agent id
+        // Lazily fetch opponent stats + LLM summary once per agent id.
         for (const seat of t.seats) {
-          if (!seat.agentId || statsRequestedRef.current.has(seat.agentId)) continue;
-          statsRequestedRef.current.add(seat.agentId);
-          fetch(`/api/stats?agentId=${encodeURIComponent(seat.agentId)}`)
-            .then((r) => r.json())
-            .then((s) => {
-              if (s.error) return;
-              setStatsByAgent((prev) => ({ ...prev, [seat.agentId]: s as AgentStats }));
-            })
-            .catch(() => {});
+          const aid = seat.agentId;
+          if (!aid) continue;
+          if (!statsRequestedRef.current.has(aid)) {
+            statsRequestedRef.current.add(aid);
+            fetch(`/api/stats?agentId=${encodeURIComponent(aid)}`)
+              .then((r) => r.json())
+              .then((s) => {
+                if (s.error) return;
+                setStatsByAgent((prev) => ({ ...prev, [aid]: s as AgentStats }));
+              })
+              .catch(() => {});
+          }
+          // Skip summarizing self.
+          if (aid === t.seats.find((x) => x.seatNumber === t.selfSeatNumber)?.agentId) continue;
+          if (!summariesRequestedRef.current.has(aid)) {
+            summariesRequestedRef.current.add(aid);
+            fetch(`/api/opponent-summary?agentId=${encodeURIComponent(aid)}`)
+              .then((r) => r.json())
+              .then((s) => {
+                if (s.summary) {
+                  setSummaryByAgent((prev) => ({ ...prev, [aid]: s.summary as string }));
+                }
+              })
+              .catch(() => {});
+          }
         }
+      } else {
+        // No table this tick. Keep displaying the last one as the "waiting"
+        // view, but also poll lobby state to detect session end vs mid-hand.
+        const lob: LobbyView | null = await fetch("/api/lobby")
+          .then((r) => r.json())
+          .catch(() => null);
+        setLobby(lob);
+        // If we're back in the lobby, the previous table session has ended.
+        // Clear the sticky view so the next game starts cleanly.
+        if (lob?.inLobby) {
+          setLastSeenTable(null);
+          statsRequestedRef.current.clear();
+          summariesRequestedRef.current.clear();
+          setStatsByAgent({});
+          setSummaryByAgent({});
+        }
+        await doAutoJoinIfNeeded(lob);
       }
     } catch (e) {
       setLastErr((e as Error).message);
     }
-  }, []);
+  }, [doAutoJoinIfNeeded]);
 
   useEffect(() => {
     if (phase !== "ready") return;
@@ -195,7 +285,7 @@ export default function Page() {
     }
   }
 
-  async function joinLobby() {
+  async function joinLobbyOnce() {
     setSubmitting(true);
     setSubmitMsg(null);
     try {
@@ -208,6 +298,20 @@ export default function Page() {
       setSubmitMsg(`✗ ${(e as Error).message}`);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Clicking the "Join" button enables continuous auto-join (game after game).
+  // Clicking again ("Stop joining") disables it. The first click also fires a
+  // manual join immediately so the user doesn't have to wait one poll tick.
+  function toggleAutoJoin() {
+    const next = !autoJoin;
+    setAutoJoin(next);
+    if (next) {
+      lastAutoJoinAtRef.current = 0; // allow immediate join
+      joinLobbyOnce();
+    } else {
+      setSubmitMsg("auto-join stopped");
     }
   }
 
@@ -229,6 +333,13 @@ export default function Page() {
   const isHeroActing =
     table?.actingSeatNumber != null && table.actingSeatNumber === table.selfSeatNumber;
   const allowed = isHeroActing ? table?.allowedActions : null;
+  // displayTable: prefer the live table; otherwise show the last seen one as
+  // a "waiting" view so the user keeps context between turns/hands.
+  const displayTable = table ?? lastSeenTable;
+  const isStaleView = !table && !!lastSeenTable;
+  const selfSeat = displayTable?.seats.find(
+    (s) => s.seatNumber === displayTable.selfSeatNumber,
+  );
 
   return (
     <div className="min-h-screen px-3 py-3 sm:px-4 sm:py-4 md:p-6 max-w-[1600px] mx-auto pb-32 xl:pb-6">
@@ -251,6 +362,7 @@ export default function Page() {
             notifyTableFound(); // quick confirmation buzz/beep when enabling
           }
         }}
+        onOpenStats={() => setStatsPanelOpen(true)}
       />
 
       {lastErr && (
@@ -259,19 +371,35 @@ export default function Page() {
         </div>
       )}
 
-      {!table ? (
-        <NoTable lobby={lobby} onJoin={joinLobby} busy={submitting} note={submitMsg} />
+      {!displayTable ? (
+        <NoTable
+          lobby={lobby}
+          autoJoin={autoJoin}
+          onToggleAutoJoin={toggleAutoJoin}
+          busy={submitting}
+          note={submitMsg}
+        />
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3 sm:gap-4">
           <div className="space-y-3 sm:space-y-4 min-w-0">
-            <PokerTable table={table} statsByAgent={statsByAgent} />
-            <EventFeed events={table.recentEvents} />
+            {isStaleView && (
+              <div className="bg-amber-900/30 border border-amber-700/50 text-amber-200 rounded-xl px-3 py-2 text-xs sm:text-sm">
+                Waiting for the next turn / hand — showing the last known state.
+                {lobby?.inLobby && " (you're back in the lobby)"}
+              </div>
+            )}
+            <PokerTable
+              table={displayTable}
+              statsByAgent={statsByAgent}
+              summaryByAgent={summaryByAgent}
+            />
+            <EventFeed events={displayTable.recentEvents} />
           </div>
           <div className="space-y-3 min-w-0">
-            <TurnBanner isHero={isHeroActing} deadline={table.actionDeadlineAt} />
+            <TurnBanner isHero={isHeroActing} deadline={displayTable.actionDeadlineAt} />
             {/* On mobile, action panel is rendered as a sticky bottom drawer (below). Inline copy hidden on small screens when it's the hero's turn — keeps the table visible. */}
             <div className={allowed ? "hidden xl:block" : ""}>
-              {allowed ? (
+              {allowed && table ? (
                 <ActionPanel
                   allowed={allowed}
                   bigBlind={table.bigBlindChips}
@@ -281,7 +409,9 @@ export default function Page() {
                 />
               ) : (
                 <div className="bg-zinc-900/95 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
-                  Waiting for your turn…
+                  {isStaleView
+                    ? "Opponents acting — you'll be notified when it's your turn."
+                    : "Waiting for your turn…"}
                 </div>
               )}
             </div>
@@ -290,7 +420,11 @@ export default function Page() {
                 {submitMsg}
               </div>
             )}
-            <AllStatsList table={table} statsByAgent={statsByAgent} />
+            <AllStatsList
+              table={displayTable}
+              statsByAgent={statsByAgent}
+              summaryByAgent={summaryByAgent}
+            />
           </div>
         </div>
       )}
@@ -302,6 +436,16 @@ export default function Page() {
           allowed={allowed}
           submitting={submitting}
           onSubmit={submitAction}
+        />
+      )}
+
+      {statsPanelOpen && (
+        <MeStatsPanel
+          me={me}
+          selfStackChips={selfSeat?.stackChips ?? null}
+          selfBigBlind={displayTable?.bigBlindChips ?? null}
+          lobby={lobby}
+          onClose={() => setStatsPanelOpen(false)}
         />
       )}
     </div>
@@ -319,6 +463,7 @@ function Header({
   onAddNew,
   notifyOn,
   onToggleNotify,
+  onOpenStats,
 }: {
   me: AgentMe | null;
   agentsInfo: AgentsResponse | null;
@@ -330,6 +475,7 @@ function Header({
   onAddNew: () => void;
   notifyOn: boolean;
   onToggleNotify: () => void;
+  onOpenStats: () => void;
 }) {
   const activeFromStore = agentsInfo?.agents.find((a) => a.isActive);
   const name = me?.name ?? activeFromStore?.agentName ?? "—";
@@ -370,6 +516,13 @@ function Header({
           className="text-[11px] sm:text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
         >
           Refresh
+        </button>
+        <button
+          onClick={onOpenStats}
+          title="My stats, chips, leaderboard"
+          className="text-[11px] sm:text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
+        >
+          📊 Me
         </button>
         <button
           onClick={onToggleNotify}
@@ -439,36 +592,179 @@ function MobileActionDrawer({
 
 function NoTable({
   lobby,
-  onJoin,
+  autoJoin,
+  onToggleAutoJoin,
   busy,
   note,
 }: {
-  lobby: unknown;
-  onJoin: () => void;
+  lobby: LobbyView | null;
+  autoJoin: boolean;
+  onToggleAutoJoin: () => void;
   busy: boolean;
   note: string | null;
 }) {
-  const l = lobby as { inLobby?: boolean; position?: number; total?: number } | null;
   return (
     <div className="mt-10 max-w-md mx-auto bg-zinc-900/80 border border-zinc-800 rounded-xl p-6 text-center">
       <h2 className="text-lg font-bold mb-2">No active table</h2>
-      {l?.inLobby && l.position != null && (
+      {lobby?.inLobby && lobby.position != null ? (
         <p className="text-sm text-zinc-400 mb-2">
-          Lobby position: #{l.position}
-          {l.total != null && ` of ${l.total}`}
+          In lobby — position #{lobby.position}
+          {lobby.total != null && ` of ${lobby.total}`}
+        </p>
+      ) : (
+        <p className="text-sm text-zinc-400 mb-4">
+          Click to start matchmaking. Auto-rejoin keeps you queued game after game until you stop. You'll need ≥1 BB in bankroll.
         </p>
       )}
-      <p className="text-sm text-zinc-400 mb-4">
-        Join the matchmaking queue to be seated. You'll need ≥1 BB in bankroll.
-      </p>
       <button
-        onClick={onJoin}
-        disabled={busy}
-        className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-md py-2 px-4 font-semibold"
+        onClick={onToggleAutoJoin}
+        disabled={busy && !autoJoin}
+        aria-pressed={autoJoin}
+        className={`rounded-md py-2 px-4 font-semibold transition ${
+          autoJoin
+            ? "bg-red-600 hover:bg-red-500"
+            : "bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+        }`}
       >
-        {busy ? "Joining…" : "Join lobby"}
+        {autoJoin ? "Stop joining" : busy ? "Joining…" : "Join lobby (auto-rejoin)"}
       </button>
+      {autoJoin && (
+        <div className="mt-3 text-[11px] text-emerald-300">
+          Auto-rejoin is on — will keep queueing you between games.
+        </div>
+      )}
       {note && <div className="mt-3 text-xs text-zinc-400">{note}</div>}
+    </div>
+  );
+}
+
+function MeStatsPanel({
+  me,
+  selfStackChips,
+  selfBigBlind,
+  lobby,
+  onClose,
+}: {
+  me: AgentMe | null;
+  selfStackChips: number | null;
+  selfBigBlind: number | null;
+  lobby: LobbyView | null;
+  onClose: () => void;
+}) {
+  const board = me?.leaderboard ?? [];
+  const stackBB = selfStackChips != null && selfBigBlind ? selfStackChips / selfBigBlind : null;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm px-3 py-6">
+      <div
+        className="absolute inset-0"
+        onClick={onClose}
+        aria-label="Close"
+        role="button"
+        tabIndex={-1}
+      />
+      <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl max-h-[90vh] overflow-y-auto scrollbar-thin">
+        <div className="sticky top-0 bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between">
+          <div>
+            <div className="text-base font-bold">{me?.name ?? "—"}</div>
+            <div className="text-xs text-zinc-500">
+              {me?.handle ? `@${me.handle}` : ""} {me?.status && `· ${me.status}`}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-100 text-xl leading-none px-2"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {me?.quote && (
+            <p className="text-xs text-zinc-400 italic">"{me.quote}"</p>
+          )}
+
+          <section>
+            <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">Chips</h3>
+            <div className="bg-zinc-800/60 rounded p-3 text-sm">
+              {selfStackChips != null ? (
+                <>
+                  <div className="text-yellow-300 font-bold text-lg">
+                    {selfStackChips.toLocaleString()}
+                  </div>
+                  {stackBB != null && (
+                    <div className="text-xs text-zinc-400">{stackBB.toFixed(1)} BB</div>
+                  )}
+                </>
+              ) : (
+                <div className="text-zinc-500 text-xs">
+                  No live stack — join a table to see your chip count.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">Lobby</h3>
+            <div className="bg-zinc-800/60 rounded p-3 text-sm">
+              {lobby?.inLobby ? (
+                <>
+                  <div>Position #{lobby.position}</div>
+                  {lobby.total != null && (
+                    <div className="text-xs text-zinc-400">of {lobby.total} waiting</div>
+                  )}
+                </>
+              ) : (
+                <div className="text-zinc-500 text-xs">Not in lobby right now.</div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
+              Leaderboard
+            </h3>
+            {board.length === 0 ? (
+              <div className="text-zinc-500 text-xs">No leaderboard entries yet.</div>
+            ) : (
+              <ul className="space-y-2">
+                {board.map((b, i) => (
+                  <li key={b.arenaId ?? i} className="bg-zinc-800/60 rounded p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-sm truncate">
+                        {b.arenaName ?? b.arenaId ?? "—"}
+                      </div>
+                      {b.arenaStatus && (
+                        <span className="text-[10px] uppercase text-zinc-500">
+                          {b.arenaStatus}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mt-1.5 text-[11px] font-mono">
+                      <Stat label="Rank" v={b.rank != null ? `#${b.rank}` : "—"} />
+                      <Stat label="Best" v={b.bestRank != null ? `#${b.bestRank}` : "—"} />
+                      <Stat label="Score" v={b.totalScore != null ? b.totalScore.toFixed(2) : "—"} />
+                    </div>
+                    {b.totalSubmissions != null && (
+                      <div className="text-[10px] text-zinc-500 mt-1">
+                        {b.totalSubmissions} submissions
+                        {b.streak != null && ` · streak ${b.streak}`}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <button
+            onClick={onClose}
+            className="w-full bg-zinc-800 hover:bg-zinc-700 rounded-md py-2 text-sm font-semibold"
+          >
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -496,9 +792,11 @@ function Countdown({ deadlineMs }: { deadlineMs: number }) {
 function AllStatsList({
   table,
   statsByAgent,
+  summaryByAgent,
 }: {
   table: Table;
   statsByAgent: Record<string, AgentStats | null>;
+  summaryByAgent: Record<string, string>;
 }) {
   const rows = table.seats
     .filter((s) => s.seatNumber !== table.selfSeatNumber)
@@ -531,6 +829,14 @@ function AllStatsList({
             {stats?.playingStyle?.tagline && (
               <div className="text-[10px] sm:text-[11px] text-zinc-500 italic line-clamp-2">"{stats.playingStyle.tagline}"</div>
             )}
+            {summaryByAgent[seat.agentId] ? (
+              <div className="mt-1 text-[11px] sm:text-xs text-emerald-200/90 bg-emerald-900/15 border border-emerald-800/40 rounded px-2 py-1.5 leading-snug">
+                <span className="text-[9px] uppercase tracking-wide text-emerald-400/80 mr-1">AI</span>
+                {summaryByAgent[seat.agentId]}
+              </div>
+            ) : stats ? (
+              <div className="mt-1 text-[10px] text-zinc-600 italic">analyzing playstyle…</div>
+            ) : null}
             <div className="mt-1 grid grid-cols-4 gap-1 text-[10px] font-mono">
               <Stat label="VPIP" v={pct(stats?.vpip)} />
               <Stat label="PFR" v={pct(stats?.pfr)} />

@@ -74,6 +74,30 @@ export function notifyTableFound(): void {
   vibrate([120, 60, 120, 60, 220]);
 }
 
+// Sharper, two-pulse alert specifically for "it's your turn now".
+export function notifyYourTurn(): void {
+  if (!isNotifyEnabled()) return;
+  const c = getCtx();
+  if (c) {
+    const now = c.currentTime;
+    // 880Hz double-beep — distinct from the 3-note table chime.
+    [0, 0.18].forEach((dt) => {
+      const osc = c.createOscillator();
+      const gain = c.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = 880;
+      const t = now + dt;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.32, t + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+      osc.connect(gain).connect(c.destination);
+      osc.start(t);
+      osc.stop(t + 0.18);
+    });
+  }
+  vibrate([60, 40, 60, 40, 60]);
+}
+
 // True once the user has interacted enough for audio to be allowed.
 export function isPrimed(): boolean {
   return primed;
