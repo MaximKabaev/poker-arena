@@ -105,33 +105,38 @@ export default function Page() {
   // so the timeout effect doesn't need autoJoin in its deps (which used to
   // cause toggling auto-rejoin to clobber armedTurnRef mid-turn).
   const autoJoinRef = useRef<boolean>(false);
-  // Tracks which tableId we're currently looking for in /texas/recent-tables.
-  // When set, a retry loop is actively polling for that id; clearing it
-  // aborts the loop.
+  // Marks which tableId we're awaiting a completed-table result for. Updated
+  // in the t-branch on each tick we see a live table; the else-branch reads
+  // this to decide which session's outcome to fetch from /texas/recent-tables.
   const lastResultFetchedRef = useRef<string | null>(null);
-  // Prevents multiple concurrent retry loops fighting over the same tableId
-  // (each poll tick used to spawn its own).
-  const lastResultInFlightRef = useRef<boolean>(false);
+  // Tracks which tableIds currently have a retry loop in flight, so a 3s
+  // poll tick during a 30s retry window doesn't spawn duplicate loops for
+  // the same id — but a *different* tableId can still kick off in parallel.
+  const lastResultInFlightRef = useRef<Set<string>>(new Set());
 
-  // Kicks off a short-lived retry loop fetching /api/recent-tables until either
-  // (a) the target tableId appears, (b) a new live table arrives (signalled
-  // by the ref being overwritten), or (c) the budget runs out (~10s).
+  // Retry loop fetching /api/recent-tables until (a) the target appears or
+  // (b) the 30s budget runs out. We deliberately do NOT abort when the live
+  // table changes — that used to silently drop most results in fast
+  // matchmaking. If a later session also completes during the loop, a
+  // parallel retry is spawned for that one independently.
   const fetchLastResultWithRetry = useCallback(async (targetTableId: string) => {
     const start = Date.now();
     let attempt = 0;
-    while (Date.now() - start < 10_000) {
-      // Aborted by a new live table (ref overwritten elsewhere).
-      if (lastResultFetchedRef.current !== targetTableId) return;
+    while (Date.now() - start < 30_000) {
       try {
         const res = await clientFetch(`/api/recent-tables?limit=10`);
         const j = await res.json();
         const arr: RecentTable[] | undefined = (j as { data?: RecentTable[] })?.data;
         const finished = arr?.find((rt) => rt.id === targetTableId);
         if (finished) {
-          setLastResult(finished);
-          if (lastResultFetchedRef.current === targetTableId) {
-            lastResultFetchedRef.current = null;
-          }
+          setLastResult((cur) => {
+            // Only overwrite if the new finding is at-least-as-recent. Avoids
+            // a slow retry for an old session clobbering a newer result.
+            if (!cur) return finished;
+            const curEnd = cur.endedAt ? Date.parse(cur.endedAt) : 0;
+            const newEnd = finished.endedAt ? Date.parse(finished.endedAt) : 0;
+            return newEnd >= curEnd ? finished : cur;
+          });
           return;
         }
       } catch {
@@ -141,8 +146,6 @@ export default function Page() {
       const delay = Math.min(600 + attempt * 250, 1500);
       await new Promise((r) => setTimeout(r, delay));
     }
-    // Budget exhausted. Leave the ref so the next regular poll tick can still
-    // pick up the result if Arena finally indexes the table.
   }, []);
 
   // Mirror the latest autoJoin into a ref so the timer below can read the
@@ -257,15 +260,18 @@ export default function Page() {
   }, []);
 
   const doAutoJoinIfNeeded = useCallback(async (lob: LobbyView | null) => {
-    if (!autoJoin) return;
+    // Read the live value via the ref — closure-based `autoJoin` would be
+    // stale on any in-flight fetchTable call from before the toggle flipped.
+    if (!autoJoinRef.current) return;
     if (joinInFlightRef.current) return;
     if (lob?.inLobby) return; // already queued, just wait
     joinInFlightRef.current = true;
     try {
       const res = await clientFetch("/api/join", { method: "POST" });
-      // 409 from /texas/join means Arena considers us "already participating"
-      // for this competition — either queued in the lobby OR seated at a
-      // table. /texas/lobby will tell us which one if it's the former.
+      // Race guard: if the toggle was disabled between the read above and
+      // the response landing, abort without surfacing a join message that
+      // would make it look like auto-join is still running.
+      if (!autoJoinRef.current) return;
       if (res.status === 409) {
         setProbablySeated(true);
         setSubmitMsg(
@@ -284,7 +290,8 @@ export default function Page() {
     } finally {
       joinInFlightRef.current = false;
     }
-  }, [autoJoin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchTable = useCallback(async () => {
     try {
@@ -311,9 +318,10 @@ export default function Page() {
 
       setTable(t);
       if (t) {
-        // Clear any prior session's completed-table result the moment we land
-        // at a new table. Same-id case keeps the existing result (rare).
-        setLastResult((cur) => (cur && cur.id !== t.tableId ? null : cur));
+        // Leave lastResult intact even when a new table starts — a slow retry
+        // for the previous session may resolve later and the user wants to
+        // see it. The result is replaced (not cleared) by setLastResult inside
+        // the retry, or dismissed via the × button on the result card.
         lastResultFetchedRef.current = t.tableId;
         setLastSeenTable(t);
         setLobby(null);
@@ -359,20 +367,19 @@ export default function Page() {
         // reviewing the outcome. The sticky view is overwritten the moment a
         // real table arrives, so we don't need to clear it here.
 
-        // Session may have ended (or we're sidelined). Run a 10s retry burst
-        // against /texas/recent-tables — Arena often takes a few seconds to
-        // index the completed table.
+        // Session may have ended (or we're sidelined). Kick off a 30s retry
+        // burst against /texas/recent-tables; Arena often needs a few seconds
+        // to index the just-completed table.
         //
         // We drive this off lastResultFetchedRef (set in the t-branch the
-        // previous tick) rather than lastSeenTable, because lastSeenTable is
-        // captured in this useCallback's stale closure and silently goes
-        // empty after the first table. The retry guards against overlap with
-        // lastResultInFlightRef.
+        // previous tick) rather than the stale `lastSeenTable` closure. The
+        // in-flight Set is keyed per-tableId so parallel sessions don't block
+        // each other.
         const targetTableId = lastResultFetchedRef.current;
-        if (targetTableId && !lastResultInFlightRef.current) {
-          lastResultInFlightRef.current = true;
+        if (targetTableId && !lastResultInFlightRef.current.has(targetTableId)) {
+          lastResultInFlightRef.current.add(targetTableId);
           fetchLastResultWithRetry(targetTableId).finally(() => {
-            lastResultInFlightRef.current = false;
+            lastResultInFlightRef.current.delete(targetTableId);
           });
         }
         await doAutoJoinIfNeeded(lob);
