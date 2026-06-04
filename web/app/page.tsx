@@ -79,6 +79,10 @@ export default function Page() {
   const [notifyOn, setNotifyOn] = useState(true);
   const [autoJoin, setAutoJoin] = useState(false);
   const [statsPanelOpen, setStatsPanelOpen] = useState(false);
+  // Sticky "probably seated" flag set when /texas/join returns 409 — Arena's
+  // only signal that we're already participating in this competition. Cleared
+  // when we either see a live table or end up in the lobby.
+  const [probablySeated, setProbablySeated] = useState(false);
   const [lastResult, setLastResult] = useState<RecentTable | null>(null);
   const [timeoutNote, setTimeoutNote] = useState<string | null>(null);
   const [replays, setReplays] = useState<ReplayEntry[] | null>(null);
@@ -190,10 +194,14 @@ export default function Page() {
     joinInFlightRef.current = true;
     try {
       const res = await fetch("/api/join", { method: "POST" });
-      // 409 = already in lobby (upstream Arena). That's exactly the state we
-      // want, so swallow it silently instead of surfacing as an error.
+      // 409 from /texas/join means Arena considers us "already participating"
+      // for this competition — either queued in the lobby OR seated at a
+      // table. /texas/lobby will tell us which one if it's the former.
       if (res.status === 409) {
-        setSubmitMsg("auto-join: already queued");
+        setProbablySeated(true);
+        setSubmitMsg(
+          "auto-join: Arena says we're already queued or seated. Waiting for a table…",
+        );
         return;
       }
       const j = await res.json();
@@ -240,6 +248,7 @@ export default function Page() {
         lastResultFetchedRef.current = t.tableId;
         setLastSeenTable(t);
         setLobby(null);
+        setProbablySeated(false); // table is visible now, no need to guess
         // Lazily fetch opponent stats + LLM summary once per agent id.
         for (const seat of t.seats) {
           const aid = seat.agentId;
@@ -275,6 +284,7 @@ export default function Page() {
           .then((r) => r.json())
           .catch(() => null);
         setLobby(lob);
+        if (lob?.inLobby) setProbablySeated(false); // confirmed queued, not seated
         // Keep the last table visible while we wait for the next one — the
         // matchmaking window is short (~10s) and the user wants to keep
         // reviewing the outcome. The sticky view is overwritten the moment a
@@ -493,6 +503,7 @@ export default function Page() {
           onToggleAutoJoin={toggleAutoJoin}
           busy={submitting}
           note={submitMsg}
+          probablySeated={probablySeated && !lobby?.inLobby}
         />
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-3 sm:gap-4">
@@ -748,17 +759,53 @@ function NoTable({
   onToggleAutoJoin,
   busy,
   note,
+  probablySeated,
 }: {
   lobby: LobbyView | null;
   autoJoin: boolean;
   onToggleAutoJoin: () => void;
   busy: boolean;
   note: string | null;
+  probablySeated?: boolean;
 }) {
+  const [diag, setDiag] = useState<null | {
+    me?: unknown;
+    lobby?: unknown;
+    recent?: unknown;
+    err?: string;
+  }>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
+
+  async function runDiagnose() {
+    setDiagBusy(true);
+    setDiag({});
+    try {
+      const [meRes, lobRes, recRes] = await Promise.all([
+        clientFetch("/api/agent").then((r) => r.json()).catch((e) => ({ error: String(e) })),
+        clientFetch("/api/lobby").then((r) => r.json()).catch((e) => ({ error: String(e) })),
+        clientFetch("/api/recent-tables?limit=3").then((r) => r.json()).catch((e) => ({ error: String(e) })),
+      ]);
+      setDiag({ me: meRes, lobby: lobRes, recent: recRes });
+    } catch (e) {
+      setDiag({ err: (e as Error).message });
+    } finally {
+      setDiagBusy(false);
+    }
+  }
+
   return (
     <div className="mt-10 max-w-md mx-auto bg-zinc-900/80 border border-zinc-800 rounded-xl p-6 text-center">
-      <h2 className="text-lg font-bold mb-2">No active table</h2>
-      {lobby?.inLobby && lobby.position != null ? (
+      <h2 className="text-lg font-bold mb-2">
+        {probablySeated ? "Probably seated — awaiting first turn" : "No active table"}
+      </h2>
+      {probablySeated ? (
+        <p className="text-sm text-zinc-400 mb-4">
+          Arena returned 409 ("already participating") to our join attempt, but the lobby
+          says you're not queued. Most likely you're seated at a table — the felt will
+          appear here on your first turn (sound + vibrate too). If this lasts more than a
+          minute, run the diagnostic below.
+        </p>
+      ) : lobby?.inLobby && lobby.position != null ? (
         <p className="text-sm text-zinc-400 mb-2">
           In lobby — position #{lobby.position}
           {lobby.total != null && ` of ${lobby.total}`}
@@ -785,7 +832,47 @@ function NoTable({
           Auto-rejoin is on — will keep queueing you between games.
         </div>
       )}
-      {note && <div className="mt-3 text-xs text-zinc-400">{note}</div>}
+      {note && <div className="mt-3 text-xs text-zinc-400 break-words">{note}</div>}
+
+      <details className="mt-4 text-left" open={diag != null}>
+        <summary
+          className="text-[11px] text-zinc-500 hover:text-zinc-300 cursor-pointer select-none"
+          onClick={(e) => {
+            if (!diag) {
+              e.preventDefault();
+              runDiagnose();
+            }
+          }}
+        >
+          {diag ? "Diagnostic" : "Stuck? Click to diagnose"}
+        </summary>
+        {diag && (
+          <div className="mt-2 space-y-2 text-[10px] font-mono text-zinc-400">
+            <button
+              onClick={runDiagnose}
+              disabled={diagBusy}
+              className="text-zinc-500 hover:text-zinc-200 underline text-[10px]"
+            >
+              {diagBusy ? "refreshing…" : "refresh"}
+            </button>
+            <DiagBlock label="/agent/me" v={diag.me} />
+            <DiagBlock label="/texas/lobby" v={diag.lobby} />
+            <DiagBlock label="/texas/recent-tables (last 3)" v={diag.recent} />
+          </div>
+        )}
+      </details>
+    </div>
+  );
+}
+
+function DiagBlock({ label, v }: { label: string; v: unknown }) {
+  if (v === undefined) return null;
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-0.5">{label}</div>
+      <pre className="bg-zinc-950/60 border border-zinc-800 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words text-[10px] text-zinc-300 max-h-40">
+        {JSON.stringify(v, null, 2)}
+      </pre>
     </div>
   );
 }
