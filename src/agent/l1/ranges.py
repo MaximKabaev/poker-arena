@@ -65,8 +65,11 @@ BB_CALL_VS_BLIND: frozenset[str] = expand_range(
     "A2o+, K8o+, Q9o+, J9o+, T9o"
 )
 
-# Facing a 3-bet: 4-bet (value-only at L1) or fold.
+# Facing a 3-bet: 4-bet (value-only at L1) or call with playable hands.
 FOUR_BET_VALUE: frozenset[str] = expand_range("KK+, AKs")
+# Hands worth calling a 3-bet at 100bb+ depth — fold-to-3bet leak fix.
+# AKo, AQs, big pairs: too strong to fold, not in 4-bet value.
+CALL_VS_3BET: frozenset[str] = expand_range("88, 99, TT, JJ, QQ, AKo, AQs, AJs")
 
 # Hands that are playable cheaply but NOT in our RFI range. Used to limp-in
 # (just call the blind) when nobody raised and we can see a flop for 1-2 chips —

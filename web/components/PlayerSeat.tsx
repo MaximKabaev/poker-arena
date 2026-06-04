@@ -10,6 +10,7 @@ interface Props {
   isActing: boolean;
   bigBlind: number;
   stats?: AgentStats | null;
+  compact?: boolean;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -20,7 +21,7 @@ const STATUS_COLOR: Record<string, string> = {
   Settled: "border-zinc-600",
 };
 
-export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats }: Props) {
+export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats, compact }: Props) {
   const [open, setOpen] = useState(false);
   const ring = isActing ? "ring-2 ring-yellow-400 shadow-glow" : "";
   const border = STATUS_COLOR[seat.status] || "border-zinc-700";
@@ -29,33 +30,34 @@ export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats }: Props) {
 
   return (
     <div
-      className={`relative bg-zinc-900/95 backdrop-blur border ${border} ${ring} rounded-xl px-3 py-2 w-56 transition`}
+      className={`relative bg-zinc-900/95 backdrop-blur border ${border} ${ring} rounded-xl px-2.5 py-2 w-full transition`}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold truncate">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs sm:text-sm font-semibold truncate">
             {seat.agentName || seat.agentHandle || "—"}
-            {isHero && <span className="ml-1 text-blue-400 text-xs">(you)</span>}
+            {isHero && <span className="ml-1 text-blue-400 text-[10px] sm:text-xs">(you)</span>}
           </div>
-          <div className="text-xs text-zinc-500 truncate">@{seat.agentHandle}</div>
+          <div className="text-[10px] sm:text-xs text-zinc-500 truncate">@{seat.agentHandle}</div>
         </div>
         <button
           onClick={() => setOpen((v) => !v)}
-          className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
+          className="shrink-0 text-[10px] sm:text-xs w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 flex items-center justify-center"
           title="Toggle full stats"
+          aria-label="Toggle stats"
         >
           {open ? "−" : "i"}
         </button>
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-xs">
-        <div>
+      <div className="mt-1.5 flex items-center justify-between text-[11px] sm:text-xs gap-1">
+        <div className="min-w-0">
           <span className="text-zinc-400">Stack </span>
           <span className="font-mono">{seat.stackChips.toLocaleString()}</span>
           <span className="text-zinc-500 ml-1">({stack}bb)</span>
         </div>
         <span
-          className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+          className={`shrink-0 text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
             seat.status === "AllIn"
               ? "bg-yellow-500/20 text-yellow-300"
               : seat.status === "Folded"
@@ -70,12 +72,12 @@ export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats }: Props) {
       </div>
 
       {seat.currentBetChips > 0 && (
-        <div className="mt-1 text-xs text-amber-300">
+        <div className="mt-1 text-[11px] sm:text-xs text-amber-300">
           bet {seat.currentBetChips.toLocaleString()}
         </div>
       )}
 
-      <div className="mt-2 flex gap-1.5">
+      <div className="mt-1.5 flex gap-1.5">
         {isHero ? (
           <>
             <Card card={seat.holeCards?.[0]} size="sm" hidden={!showHole} />
@@ -89,10 +91,10 @@ export function PlayerSeat({ seat, isHero, isActing, bigBlind, stats }: Props) {
         )}
       </div>
 
-      <StatsSummary stats={stats} />
+      {!compact && <StatsSummary stats={stats} />}
 
       {open && (
-        <div className="mt-2 pt-2 border-t border-zinc-800 text-xs space-y-1">
+        <div className="mt-2 pt-2 border-t border-zinc-800 text-[11px] sm:text-xs space-y-1">
           {stats ? <StatsFull stats={stats} /> : <span className="text-zinc-500">No stats yet</span>}
         </div>
       )}
@@ -107,9 +109,9 @@ function StatsSummary({ stats }: { stats?: AgentStats | null }) {
   const arche = ps.archetype;
   if (!tag && !arche) return null;
   return (
-    <div className="mt-2 text-[11px] text-zinc-400 leading-snug">
+    <div className="mt-1.5 text-[10px] sm:text-[11px] text-zinc-400 leading-snug">
       {arche && <span className="text-zinc-200 font-medium">{arche}</span>}
-      {tag && <div className="text-zinc-500 italic">"{tag}"</div>}
+      {tag && <div className="text-zinc-500 italic line-clamp-2">"{tag}"</div>}
     </div>
   );
 }

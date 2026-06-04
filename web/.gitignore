@@ -3,6 +3,5 @@ node_modules
 out
 .env
 .env.local
-.claim.json
 .creds.json
 *.log

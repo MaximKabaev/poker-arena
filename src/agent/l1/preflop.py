@@ -189,7 +189,7 @@ def preflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decision
             reasoning=_reasoning({"vr": f"ln:{opener_pos} open", "pp": "fold off-chart", "ke": code}),
         )
 
-    # ---- facing 3-bet: 4-bet value only or fold ----
+    # ---- facing 3-bet: 4-bet value, call playable, else fold ----
     if raises == 2:
         if code in R.FOUR_BET_VALUE:
             target = int(table.current_bet * 2.3)
@@ -200,6 +200,17 @@ def preflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decision
                     "vr": "ln:3bet val", "ke": f"4bet {code}",
                     "pp": f"{hero_pos} {action}",
                     "sr": "2.3x val" if action == "raise" else "shove val",
+                }),
+            )
+        # AKo / AQs / big pairs — too strong to fold, not in 4-bet value.
+        # Call to see a flop / realise equity.
+        if code in R.CALL_VS_3BET and a.can_call:
+            return Decision(
+                action="call", message="gg", layer="L1",
+                reasoning=_reasoning({
+                    "vr": "ln:3bet val", "ke": f"call {code}",
+                    "pp": f"{hero_pos} call vs 3bet",
+                    "sr": "realise eq",
                 }),
             )
         if a.can_check:

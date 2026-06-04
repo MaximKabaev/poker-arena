@@ -212,15 +212,31 @@ def postflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decisio
 
     # Escalate to L2 when the most recent aggressor is an outlier — but ONLY for
     # ambiguous tiers. With strong/nuts we ALWAYS value-bet/raise; escalation here
-    # would risk L2 timeout → safe-default fold of a monster (a real bug we saw with
-    # queens full of jacks on Jc Qh Js 9d Qd vs an outlier SB).
+    # would risk L2 timeout → safe-default fold of a monster.
+    #
+    # Equity gate on turn/river: factor in villain's bluff frequency. Raw equity
+    # vs random underestimates our equity vs a maniac (lots of bluffs in their
+    # range we beat). Threshold: effective equity must be ≥30% on turn/river to
+    # escalate. vs a nit (bluff% ~5), ace-high stays below threshold → L1 folds.
+    # vs a maniac (bluff% ~40), ace-high gets +20% bluff boost → escalates so L2
+    # can craft the exploit call.
+    is_late_street = table.street in (Street.TURN, Street.RIVER)
     if ctx and ctx.cache and tier in ("medium", "marginal", "air"):
         aggressor_seat = recent_aggressor_seat(table)
         agg_id = seat_to_agent_id(table, aggressor_seat)
         if agg_id:
             stats = ctx.cache.get(agg_id, table.competition_id)
             if is_outlier(stats):
-                return None  # escalate to L2
+                # Bluff-aware effective equity: each 1% villain bluff freq adds
+                # ~0.5% effective equity (we beat their bluffs at showdown).
+                bluff_boost = 0.0
+                if stats and stats.bluff_pct is not None:
+                    bluff_boost = stats.bluff_pct * 0.5
+                effective_eq = eq + bluff_boost
+                if is_late_street and effective_eq < 0.30:
+                    pass  # eq too low even with bluff boost — let L1 fold
+                else:
+                    return None  # escalate to L2
 
     # Pattern overrides on flop — c_bet_whiff and folds_to_cbet
     pat_decision = _pattern_override(table, tier, ctx)

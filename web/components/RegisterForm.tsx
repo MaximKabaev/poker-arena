@@ -48,7 +48,7 @@ export function RegisterForm({ onRegistered }: Props) {
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch("/api/register", {
+      const res = await fetch("/api/agents", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

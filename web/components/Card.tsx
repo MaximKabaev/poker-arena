@@ -11,9 +11,9 @@ interface Props {
 }
 
 const SIZE = {
-  sm: "w-8 h-11 text-xs",
-  md: "w-12 h-16 text-base",
-  lg: "w-16 h-22 text-lg",
+  sm: "w-7 h-10 sm:w-8 sm:h-11 text-[10px] sm:text-xs",
+  md: "w-10 h-14 sm:w-12 sm:h-16 text-sm sm:text-base",
+  lg: "w-14 h-20 sm:w-16 sm:h-[5.5rem] text-base sm:text-lg",
 };
 
 export function Card({ card, size = "md", hidden }: Props) {
