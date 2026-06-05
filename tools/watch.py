@@ -241,7 +241,10 @@ def _render(
         for r in recent[:8]:
             d = r.get("chipDelta", 0)
             winner = r.get("winnerHandle", "?")
+            url = r.get("replayUrl") or ""
             out.append(f"  {_color_for_delta(d)}{d:+5d}{RESET}  vs winner={winner}")
+            if url:
+                out.append(f"        {DIM}{url}{RESET}")
         net = sum(r.get("chipDelta", 0) for r in recent[:8])
         out.append(f"  {DIM}--- net last 8: {_color_for_delta(net)}{net:+d}{RESET}{DIM} ---{RESET}")
     else:
