@@ -9,33 +9,41 @@ from __future__ import annotations
 
 from ..cards import expand_range
 
-# Raise-first-in (RFI) ranges — reverted to the pre-big-win baseline (the state
-# that produced the +1003 spike). Protect-the-lead tightening was too defensive
-# and bled chips. ~17% avg VPIP, BTN aggressive, blinds reasonable.
+# Raise-first-in (RFI) ranges — AGGRESSIVE MODE (2026-06-05).
+# Wider at every position. ~22% avg VPIP. The +14.80 baseline was achieved with
+# tighter ranges; loosening here is a directional bet that the Playground field
+# folds enough preflop that wider opens pick up dead money.
 RFI: dict[str, frozenset[str]] = {
     "UTG": expand_range(
-        "77+, AJs+, KQs, AQo+"
-    ),
-    "HJ": expand_range(
         "66+, ATs+, KTs+, QJs, JTs, AJo+, KQo"
     ),
+    "HJ": expand_range(
+        "55+, A9s+, K9s+, QTs+, JTs, T9s, ATo+, KJo+, QJo"
+    ),
     "CO": expand_range(
-        "22+, A2s+, KTs+, Q9s+, J9s+, T9s, 98s, ATo+, KJo+, QJo"
+        "22+, A2s+, K8s+, Q8s+, J8s+, T8s+, 97s+, 87s, 76s, "
+        "A8o+, KTo+, QTo+, JTo"
     ),
     "BTN": expand_range(
-        "22+, A2s+, K8s+, Q8s+, J8s+, T8s+, 97s+, 87s, 76s, 65s, "
-        "A8o+, KTo+, QTo+, JTo, T9o"
+        "22+, A2s+, K2s+, Q5s+, J7s+, T7s+, 96s+, 85s+, 75s+, 64s+, 53s+, "
+        "A2o+, K8o+, Q9o+, J9o+, T9o, 98o, 87o, 76o"
     ),
     "SB": expand_range(
-        "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo"
+        "22+, A2s+, K7s+, Q8s+, J8s+, T8s+, 97s+, 87s, 76s, "
+        "A7o+, K9o+, Q9o+, J9o+, T9o"
     ),
 }
 
-# Facing a single open: ranges to 3-bet (value), call, or fold.
-# Tier the opener: "early" = UTG/HJ, "late" = CO/BTN, "blind" = SB.
-THREE_BET_VS_EARLY: frozenset[str] = expand_range("QQ+, AKs, AKo")
-THREE_BET_VS_LATE: frozenset[str] = expand_range("TT+, AQs+, AKo, KQs")
-THREE_BET_VS_BLIND: frozenset[str] = expand_range("99+, AJs+, AQo+, KQs")
+# Facing a single open: ranges to 3-bet (value + light), call, or fold.
+# Widened in aggressive mode — more value 3-bets AND bluff combos when patterns
+# don't trigger (the fold_to_3bet exploit branch handles deeper bluffs).
+THREE_BET_VS_EARLY: frozenset[str] = expand_range("JJ+, AQs+, AKo, KQs, A5s")
+THREE_BET_VS_LATE: frozenset[str] = expand_range(
+    "99+, AJs+, AQo+, KQs, KJs, A5s, A4s"
+)
+THREE_BET_VS_BLIND: frozenset[str] = expand_range(
+    "88+, ATs+, AJo+, KQs, KJs, QJs, A5s, A4s"
+)
 
 # Call-an-open ranges (non-BB). Tightened 2026-06-04 to match rock baseline.
 # We rarely call wide — most of our "facing open" play is 3-bet or fold.
@@ -63,8 +71,9 @@ BB_CALL_VS_BLIND: frozenset[str] = expand_range(
     "A2o+, K8o+, Q9o+, J9o+, T9o"
 )
 
-# Facing a 3-bet: 4-bet (value-only at L1) or call with playable hands.
-FOUR_BET_VALUE: frozenset[str] = expand_range("KK+, AKs")
+# Facing a 3-bet: 4-bet (value + AKo) or call playable hands.
+# Aggressive mode adds QQ + AKo to 4-bet for value.
+FOUR_BET_VALUE: frozenset[str] = expand_range("QQ, KK, AA, AKs, AKo")
 # Hands worth calling a 3-bet at 100bb+ depth — fold-to-3bet leak fix.
 # AKo, AQs, big pairs: too strong to fold, not in 4-bet value.
 CALL_VS_3BET: frozenset[str] = expand_range(
@@ -72,10 +81,12 @@ CALL_VS_3BET: frozenset[str] = expand_range(
 )
 
 # Facing a 4-bet+ (cold 4-bet, 5-bet, or deeper). Used as L1 chart so we never
-# safe-default-fold a monster when L2 times out (real bug: AcKs auto-folded for
-# -24 chips when L2 hit the 30s ceiling on a 4-bet pot).
-FIVE_BET_SHOVE: frozenset[str] = expand_range("AA")
-CALL_VS_4BET_PLUS: frozenset[str] = expand_range("KK, QQ, AKs, AKo")
+# safe-default-fold a monster when L2 times out.
+# Aggressive mode: shove AA/KK, call with everything reasonably defensible.
+FIVE_BET_SHOVE: frozenset[str] = expand_range("KK, AA, AKs")
+CALL_VS_4BET_PLUS: frozenset[str] = expand_range(
+    "JJ, QQ, KK, AKo, AKs, AQs"
+)
 
 # Hands that are playable cheaply but NOT in our RFI range. Used to limp-in
 # (just call the blind) when nobody raised and we can see a flop for 1-2 chips —

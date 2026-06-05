@@ -18,8 +18,52 @@ from ..cards import RANK_VAL
 from ..context import DecisionContext
 from ..patterns.spots import SpotType, current_spot, preflop_aggressor_seat
 from ..reasoning import build as build_reasoning
-from ..state import AllowedActions, Decision, Street, Table
+from ..state import AllowedActions, Decision, SeatStatus, Street, Table
 from .exploits import is_outlier, recent_aggressor_seat, seat_to_agent_id
+
+
+def _winnable_pot(table: Table) -> int:
+    """Side-pot-aware pot we can actually claim if we win.
+
+    Standard pot odds (`call_chips / (pot + call_chips)`) overstates EV when
+    an opponent is all-in for MORE than our stack: their over-bet is returned
+    to them, not winnable by us. We can only win MIN(opponent_commit, our_commit)
+    from each opponent, plus dead money from folded players.
+
+    Real bug this fixes: Q2o vs a 14,089-chip jam was "called" because L2 saw
+    pot odds 3% (treating full 14,179 pot as winnable), but real pot odds were
+    45% (we could only win 978 of the 14,179). The call lost ~110 chips in EV.
+    """
+    a = table.allowed_actions
+    hero_seat = table.hero_seat
+    if a is None or hero_seat is None:
+        return table.pot_chips
+
+    hero_final_commit = hero_seat.total_committed_chips + a.call_chips
+    winnable = hero_final_commit  # our own contribution returns to us if we win
+
+    for seat in table.seats:
+        if seat.seat_number == hero_seat.seat_number:
+            continue
+        opp_commit = seat.total_committed_chips
+        if seat.status == SeatStatus.FOLDED:
+            # Dead money — entire commit goes to the eventual winner
+            winnable += opp_commit
+        else:
+            # Active opponent — we can only win the matched portion
+            winnable += min(opp_commit, hero_final_commit)
+    return winnable
+
+
+def _pot_odds_side(table: Table) -> float:
+    """Side-pot-aware pot odds. Returns required equity to break even."""
+    a = table.allowed_actions
+    if a is None or a.call_chips <= 0:
+        return 0.0
+    winnable = _winnable_pot(table)
+    cost = a.call_chips
+    # cost / winnable — winnable already includes our cost
+    return cost / max(winnable, 1)
 
 
 def _is_dry_board(board: list[str]) -> bool:
@@ -180,6 +224,8 @@ def _combined_equity(tier: HandTier, draw: DrawType) -> float:
 
 
 def _pot_odds(allowed: AllowedActions, pot: int) -> float:
+    """Legacy non-side-pot-aware odds. Retained for callers that don't have
+    the full Table state; prefer _pot_odds_side(table) when possible."""
     cost = allowed.call_chips
     return cost / (pot + cost) if cost > 0 else 0.0
 
@@ -310,7 +356,8 @@ def postflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decisio
 
     # ---- facing a bet/raise ----
     if a.can_call and a.call_chips > 0:
-        odds = _pot_odds(a, pot)
+        # Side-pot-aware odds — won't overcount unmatched all-in over-bets.
+        odds = _pot_odds_side(table)
         if tier in ("nuts", "strong") and a.can_raise:
             # On river, raise bigger for value (3x vs 2.5x) — extract more.
             mult = 3.0 if is_river else 2.5
@@ -385,11 +432,12 @@ def postflop_decide(table: Table, ctx: DecisionContext | None = None) -> Decisio
                     "sr": "33% pot dry",
                 }),
             )
-        # Semibluff — re-enabled (flop only, OE/combo only). Pre-big-win baseline.
+        # Semibluff — AGGRESSIVE MODE: flop OR turn, FD/OE/combo, air/marginal.
+        # Widened from flop-only OE/combo-only to also include FD and turn barrels.
         if (
-            draw in ("combo", "OE")
-            and table.street == Street.FLOP
-            and tier == "air"
+            draw in ("combo", "OE", "FD")
+            and table.street in (Street.FLOP, Street.TURN)
+            and tier in ("air", "marginal")
             and (a.can_bet or a.can_raise)
         ):
             target = max(int(pot * 0.33), a.min_bet or 0)

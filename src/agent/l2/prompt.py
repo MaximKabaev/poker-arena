@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from ..cards import hand_code
 from ..l1.positions import derive_positions
+from ..l1.postflop import _winnable_pot, _pot_odds_side
 from ..opponents import OpponentStats
-from ..state import Table
+from ..state import SeatStatus, Table
 from ..tools.range_equity import equity_summary
 
 SYSTEM_PROMPT = """You are a 6-max No-Limit Hold'em poker agent on the dev.fun Arena.
@@ -64,6 +65,31 @@ def _recent_actions(table: Table, limit: int = 12) -> list[str]:
     return out
 
 
+def _action_context_line(table: Table) -> str:
+    """Pot odds line that correctly accounts for side-pot rules.
+
+    Naive math = call_chips / (visible_pot + call_chips). That overstates the
+    pot when an opponent is all-in for more than our stack — their unmatched
+    over-bet is returned, not won by us. Fix: use the winnable portion.
+    """
+    a = table.allowed_actions
+    if a is None or a.call_chips <= 0:
+        return "- nothing to call"
+    naive_odds = a.call_chips / (table.pot_chips + a.call_chips) * 100
+    winnable = _winnable_pot(table)
+    side_odds = a.call_chips / max(winnable, 1) * 100
+    base = (
+        f"- call cost: {a.call_chips} chips  "
+        f"effective_pot_odds={side_odds:.0f}% (winnable pot {winnable})"
+    )
+    if abs(side_odds - naive_odds) > 2:
+        base += (
+            f"  NOTE: naive odds would be {naive_odds:.0f}% — opponent is all-in "
+            f"for more than your stack so the over-bet portion is not winnable."
+        )
+    return base
+
+
 def _range_equity_lines(table: Table) -> list[str]:
     """Inject range-vs-range equity estimates so L2 doesn't anchor on
     misleading 'vs random' equity (the bias that drove the 55 call leak)."""
@@ -113,9 +139,7 @@ def build_messages(
         "",
         "ACTION CONTEXT",
         f"- current bet on street: {table.current_bet}",
-        f"- call cost: {a.call_chips} chips (pot odds "
-        f"{(a.call_chips / (table.pot_chips + a.call_chips) * 100):.0f}%)" if a.call_chips else
-        "- nothing to call",
+        _action_context_line(table),
         f"- max commit on this street: {a.max_commit}",
         f"- legal actions: {a.available_actions}",
         f"- action hint: {a.action_hint}",
