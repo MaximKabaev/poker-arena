@@ -199,6 +199,7 @@ def _color_for_delta(d: int) -> str:
 def _render(
     standings: dict, recent: list[dict], layer_counts: dict, last_actions: list[dict],
     log_path: Path | None, last_pull_ts: float, current_table: dict,
+    last_error: str | None = None,
 ) -> None:
     out: list[str] = [CLEAR]
     out.append(f"{BOLD}===== Texas Beat 'Em — Live ====={RESET}")
@@ -264,10 +265,14 @@ def _render(
     else:
         out.append(f"  {DIM}(waiting for events…){RESET}")
 
-    if log_path:
-        out.append("")
-        out.append(f"  {DIM}log: {log_path.name}    "
-                   f"API last pulled {int(time.time() - last_pull_ts)}s ago{RESET}")
+    out.append("")
+    age = int(time.time() - last_pull_ts)
+    age_color = GREEN if age < 15 else (YELLOW if age < 60 else RED)
+    log_name = log_path.name if log_path else "(no local log)"
+    out.append(f"  {DIM}log: {log_name}    "
+               f"API last pulled {age_color}{age}s ago{RESET}")
+    if last_error:
+        out.append(f"  {RED}API error: {last_error}{RESET}")
     out.append(f"  {DIM}Ctrl-C to exit (does NOT stop the agent){RESET}")
 
     sys.stdout.write("\n".join(out) + "\n")
@@ -281,6 +286,7 @@ async def _api_loop(
     while True:
         try:
             r = await client.get("/api/arena/agent/me")
+            r.raise_for_status()
             me = r.json()
             for lb in me.get("leaderboard", []):
                 if "Playground" in lb.get("arenaName", ""):
@@ -289,11 +295,19 @@ async def _api_loop(
             r2 = await client.get(
                 f"/api/arena/agent/{agent_id}/replays?limit=10"
             )
+            r2.raise_for_status()
             recent.clear()
             recent.extend(r2.json())
             state["last_pull_ts"] = time.time()
-        except Exception:
-            pass
+            state["last_error"] = None
+        except httpx.HTTPStatusError as e:
+            state["last_error"] = f"HTTP {e.response.status_code} {e.request.url.path}"
+        except httpx.TimeoutException:
+            state["last_error"] = "timeout (>10s) — network or arena slow"
+        except httpx.ConnectError as e:
+            state["last_error"] = f"connect failed: {type(e).__name__} — DNS/firewall?"
+        except Exception as e:
+            state["last_error"] = f"{type(e).__name__}: {str(e)[:80]}"
         await asyncio.sleep(API_REFRESH)
 
 
@@ -412,6 +426,7 @@ async def main() -> int:
                 _render(
                     standings, recent, layer_counts, last_actions,
                     state.get("log_path"), state["last_pull_ts"], current_table,
+                    state.get("last_error"),
                 )
                 await asyncio.sleep(RENDER_REFRESH)
         finally:
