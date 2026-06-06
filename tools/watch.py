@@ -200,6 +200,7 @@ def _render(
     standings: dict, recent: list[dict], layer_counts: dict, last_actions: list[dict],
     log_path: Path | None, last_pull_ts: float, current_table: dict,
     last_error: str | None = None,
+    lobby: dict | None = None,
 ) -> None:
     out: list[str] = [CLEAR]
     out.append(f"{BOLD}===== Texas Beat 'Em — Live ====={RESET}")
@@ -220,12 +221,31 @@ def _render(
     else:
         out.append(f"  {DIM}(waiting for API…){RESET}")
 
+    # Lobby queue position (only meaningful when not at a table)
+    if lobby:
+        pos = lobby.get("position")
+        total = lobby.get("total")
+        joined_ms = lobby.get("joinedAt")
+        wait_str = ""
+        if joined_ms:
+            wait_min = (time.time() - joined_ms / 1000) / 60
+            wait_str = f", waiting {wait_min:.1f} min"
+        out.append(
+            f"  {DIM}lobby queue:{RESET} {YELLOW}#{pos}{RESET}{DIM} of {total}{wait_str}{RESET}"
+        )
+
     # Current table view — board + seats + waiting-on
     out.append("")
     if current_table:
         _render_table(out, current_table)
     else:
-        out.append(f"{BOLD}Table:{RESET} {DIM}(waiting…){RESET}")
+        if lobby and lobby.get("position"):
+            out.append(
+                f"{BOLD}Table:{RESET} {DIM}none — queued in lobby "
+                f"(#{lobby.get('position')}/{lobby.get('total')}){RESET}"
+            )
+        else:
+            out.append(f"{BOLD}Table:{RESET} {DIM}(waiting…){RESET}")
 
     out.append("")
     out.append(f"{BOLD}Layer mix this watcher session:{RESET}")
@@ -279,35 +299,70 @@ def _render(
     sys.stdout.flush()
 
 
-async def _api_loop(
-    client: httpx.AsyncClient, agent_id: str, standings: dict, recent: list[dict],
-    state: dict,
+async def _fetch_me(client: httpx.AsyncClient, standings: dict, state: dict) -> None:
+    try:
+        r = await client.get("/api/arena/agent/me", timeout=5.0)
+        r.raise_for_status()
+        me = r.json()
+        for lb in me.get("leaderboard", []):
+            if "Playground" in lb.get("arenaName", ""):
+                standings.clear()
+                standings.update(lb)
+        state["last_pull_ts"] = time.time()
+        state["err_me"] = None
+    except Exception as e:
+        state["err_me"] = f"{type(e).__name__}: {str(e)[:60]}"
+
+
+async def _fetch_lobby(client: httpx.AsyncClient, comp_id: str, state: dict) -> None:
+    try:
+        r = await client.get(
+            "/api/arena/texas/lobby", params={"competitionId": comp_id}, timeout=5.0
+        )
+        r.raise_for_status()
+        state["lobby"] = r.json().get("lobby") or {}
+        state["err_lobby"] = None
+    except Exception as e:
+        state["err_lobby"] = f"{type(e).__name__}: {str(e)[:60]}"
+
+
+async def _fetch_replays(
+    client: httpx.AsyncClient, agent_id: str, recent: list[dict], state: dict,
 ) -> None:
+    try:
+        r = await client.get(
+            f"/api/arena/agent/{agent_id}/replays", params={"limit": 10}, timeout=8.0
+        )
+        r.raise_for_status()
+        recent.clear()
+        recent.extend(r.json())
+        state["err_replays"] = None
+    except Exception as e:
+        state["err_replays"] = f"{type(e).__name__}: {str(e)[:60]}"
+
+
+async def _api_loop(
+    client: httpx.AsyncClient, agent_id: str, comp_id: str,
+    standings: dict, recent: list[dict], state: dict,
+) -> None:
+    """Pull each endpoint independently so one slow one doesn't stall the others."""
     while True:
-        try:
-            r = await client.get("/api/arena/agent/me")
-            r.raise_for_status()
-            me = r.json()
-            for lb in me.get("leaderboard", []):
-                if "Playground" in lb.get("arenaName", ""):
-                    standings.clear()
-                    standings.update(lb)
-            r2 = await client.get(
-                f"/api/arena/agent/{agent_id}/replays?limit=10"
-            )
-            r2.raise_for_status()
-            recent.clear()
-            recent.extend(r2.json())
-            state["last_pull_ts"] = time.time()
-            state["last_error"] = None
-        except httpx.HTTPStatusError as e:
-            state["last_error"] = f"HTTP {e.response.status_code} {e.request.url.path}"
-        except httpx.TimeoutException:
-            state["last_error"] = "timeout (>10s) — network or arena slow"
-        except httpx.ConnectError as e:
-            state["last_error"] = f"connect failed: {type(e).__name__} — DNS/firewall?"
-        except Exception as e:
-            state["last_error"] = f"{type(e).__name__}: {str(e)[:80]}"
+        # /me + /lobby in parallel — both small, fast endpoints.
+        await asyncio.gather(
+            _fetch_me(client, standings, state),
+            _fetch_lobby(client, comp_id, state),
+            return_exceptions=True,
+        )
+        # /replays is sometimes slow (arena-side). Fire it but don't let it
+        # block the next /me cycle — kick it off and continue.
+        asyncio.create_task(_fetch_replays(client, agent_id, recent, state))
+        # Roll up errors for display.
+        errs = [
+            f"me:{state['err_me']}" if state.get("err_me") else None,
+            f"lobby:{state['err_lobby']}" if state.get("err_lobby") else None,
+            f"replays:{state['err_replays']}" if state.get("err_replays") else None,
+        ]
+        state["last_error"] = " | ".join(x for x in errs if x) or None
         await asyncio.sleep(API_REFRESH)
 
 
@@ -411,13 +466,15 @@ async def main() -> int:
     sys.stdout.write(ENTER_ALT + HIDE_CURSOR)
     sys.stdout.flush()
 
+    comp_id = settings.competition_id or os.environ.get("COMPETITION_ID", "")
+
     async with httpx.AsyncClient(
         base_url=settings.arena_base_url, timeout=10.0,
         headers={"x-arena-api-key": creds["apiKey"]},
     ) as client:
         tasks = [
             asyncio.create_task(
-                _api_loop(client, creds["agentId"], standings, recent, state)
+                _api_loop(client, creds["agentId"], comp_id, standings, recent, state)
             ),
             asyncio.create_task(_tail_loop(layer_counts, last_actions, state, current_table)),
         ]
@@ -427,6 +484,7 @@ async def main() -> int:
                     standings, recent, layer_counts, last_actions,
                     state.get("log_path"), state["last_pull_ts"], current_table,
                     state.get("last_error"),
+                    state.get("lobby"),
                 )
                 await asyncio.sleep(RENDER_REFRESH)
         finally:
